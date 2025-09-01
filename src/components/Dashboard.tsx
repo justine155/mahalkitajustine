@@ -3,22 +3,25 @@ import { Clock, BookOpen, TrendingUp, Calendar, Bell, CheckCircle2, AlertTriangl
 import { Task, StudyPlan } from '../types';
 import { formatTime, getLocalDateString, checkSessionStatus } from '../utils/scheduling';
 import SafePieChart from './SafePieChart';
+import HabitTracker from './HabitTracker';
+import { Habit } from '../types';
+import EnvironmentCard from './EnvironmentCard';
 
 interface DashboardProps {
   tasks: Task[];
   studyPlans: StudyPlan[];
   dailyAvailableHours: number;
   workDays: number[];
-  // lastTimedSession: { planDate: string; sessionNumber: number } | null; // removed
-  // readyToMarkDone: { planDate: string; sessionNumber: number } | null; // keep if used
-  // onMarkSessionDone: (planDate: string, sessionNumber: number) => void; // removed
-  // onUndoSessionDone: (planDate: string, taskId: string, sessionNumber: number) => void; // removed
   onSelectTask: (task: Task, session?: { allocatedHours: number; planDate?: string; sessionNumber?: number }) => void;
-  onGenerateStudyPlan?: () => void; // Add regenerate handler
+  onGenerateStudyPlan?: () => void;
   hasCompletedTutorial?: boolean;
+  habits: Habit[];
+  onAddHabit: (habit: { title: string; cadence: 'daily' | 'weekly'; targetPerWeek?: number; reminder?: boolean }) => void;
+  onToggleHabitToday: (id: string) => void;
+  onDeleteHabit: (id: string) => void;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ tasks, studyPlans, dailyAvailableHours, workDays, onSelectTask, onGenerateStudyPlan }) => {
+const Dashboard: React.FC<DashboardProps> = ({ tasks, studyPlans, dailyAvailableHours, workDays, onSelectTask, onGenerateStudyPlan, habits, onAddHabit, onToggleHabitToday, onDeleteHabit }) => {
   const [showRegeneratePrompt, setShowRegeneratePrompt] = useState(true);
   const [analyticsFilter, setAnalyticsFilter] = useState<'all' | 'week' | 'month' | 'custom'>('all');
   const [customStart, setCustomStart] = useState('');
@@ -186,6 +189,8 @@ const Dashboard: React.FC<DashboardProps> = ({ tasks, studyPlans, dailyAvailable
           ))}
         </div>
       </div>
+
+      <EnvironmentCard />
 
           {useMemo(() => {
         const totalAllEstimatedHours = tasks.reduce((sum, task) => sum + task.estimatedHours, 0);
@@ -761,6 +766,9 @@ const Dashboard: React.FC<DashboardProps> = ({ tasks, studyPlans, dailyAvailable
       </div>
 
       {/* Move session analytics, recent activities, and table into a compact grid at the bottom */}
+      {/* Habits Card */}
+      <HabitTracker habits={habits} onAddHabit={onAddHabit} onToggleHabitToday={onToggleHabitToday} onDeleteHabit={onDeleteHabit} />
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
         {/* Session Analytics Card - Bottom */}
         <div className="bg-white rounded-xl shadow p-4 dark:bg-gray-900 dark:shadow-gray-900 flex flex-col justify-between min-h-[180px]">
