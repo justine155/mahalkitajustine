@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Calendar, CheckSquare, Clock, Settings as SettingsIcon, BarChart3, CalendarDays, Lightbulb, Edit, Trash2, Menu, X, HelpCircle, Trophy, User } from 'lucide-react';
-import { Task, StudyPlan, UserSettings, FixedCommitment, Commitment, StudySession, TimerState } from './types';
+import { Task, StudyPlan, UserSettings, FixedCommitment, Commitment, StudySession, TimerState, Habit } from './types';
 import { GamificationData, Achievement, DailyChallenge, MotivationalMessage } from './types-gamification';
 import { useRobustTimer, startTimer, pauseTimer, resumeTimer, resetTimer, updateTimerTime } from './hooks/useRobustTimer';
 import { getUnscheduledMinutesForTasks, getLocalDateString, checkCommitmentConflicts, generateNewStudyPlan, generateNewStudyPlanWithPreservation, reshuffleStudyPlan, markPastSessionsAsSkipped, formatTime } from './utils/scheduling';
@@ -36,6 +36,7 @@ import TimePilotIcon from './components/TimePilotIcon';
 import WelcomeOnboarding from './components/WelcomeOnboarding';
 import GuidedTaskInput from './components/GuidedTaskInput';
 import Confetti from './components/Confetti';
+import PWAInstallPrompt from './components/PWAInstallPrompt';
 import './utils/test-data-setup'; // Import test data setup for testing
 import { assessAddTaskFeasibility } from './utils/task-feasibility';
 
@@ -94,6 +95,9 @@ function App() {
     const [notificationMessage, setNotificationMessage] = useState<string | null>(null);
     const [autoRemovedTasks, setAutoRemovedTasks] = useState<string[]>([]);
     const [showSuggestionsPanel, setShowSuggestionsPanel] = useState(false);
+
+    // Habits state
+    const [habits, setHabits] = useState<Habit[]>([]);
 
     // State to track if current timer is for a commitment
     const [currentCommitment, setCurrentCommitment] = useState<FixedCommitment | null>(null);
@@ -235,6 +239,15 @@ function App() {
                 }
             }
 
+            // Load habits
+            const savedHabits = localStorage.getItem('timepilot-habits');
+            if (savedHabits) {
+                try {
+                    const parsed = JSON.parse(savedHabits);
+                    if (Array.isArray(parsed)) setHabits(parsed);
+                } catch {}
+            }
+
             // Load gamification data
             const savedGamification = localStorage.getItem('timepilot-gamification');
             if (savedGamification) {
@@ -281,6 +294,11 @@ function App() {
             document.documentElement.classList.add('dark');
         } else {
             document.documentElement.classList.remove('dark');
+        }
+        // Update theme-color to match mode (for mobile status bar)
+        const meta = document.querySelector('meta[name="theme-color"]') as HTMLMetaElement | null;
+        if (meta) {
+            meta.setAttribute('content', darkMode ? '#0b1020' : '#3b82f6');
         }
     }, [darkMode]);
 
@@ -638,6 +656,10 @@ function App() {
         localStorage.setItem('timepilot-studyPlans', JSON.stringify(studyPlans));
     }, [studyPlans]);
 
+    useEffect(() => {
+        localStorage.setItem('timepilot-habits', JSON.stringify(habits));
+    }, [habits]);
+
     // Mark plan as stale when tasks, settings, or commitments change (but not on initial load)
     useEffect(() => {
         if (!hasLoadedFromStorage) return;
@@ -652,6 +674,85 @@ function App() {
             setIsPlanStale(false);
         }
     }, [tasks, settings, fixedCommitments, hasLoadedFromStorage]);
+
+    // Habit helpers
+    const computeDailyStreak = (dates: Set<string>, todayStr: string) => {
+        let streak = 0;
+        const d = new Date(todayStr);
+        while (true) {
+            const yyyy = d.toISOString().split('T')[0];
+            if (dates.has(yyyy)) {
+                streak += 1;
+                d.setDate(d.getDate() - 1);
+            } else {
+                break;
+            }
+        }
+        return streak;
+    };
+
+    const computeWeeklyStreak = (history: string[], targetPerWeek: number = 1, todayStr: string) => {
+        // Count consecutive weeks (ending this week) meeting target
+        const byWeek = new Map<string, number>();
+        history.forEach(d => {
+            const date = new Date(d);
+            const startOfWeek = new Date(date);
+            startOfWeek.setDate(date.getDate() - date.getDay());
+            const key = startOfWeek.toISOString().split('T')[0];
+            byWeek.set(key, (byWeek.get(key) || 0) + 1);
+        });
+        let streak = 0;
+        const now = new Date(todayStr);
+        const weekStart = new Date(now);
+        weekStart.setDate(now.getDate() - now.getDay());
+        while (true) {
+            const key = weekStart.toISOString().split('T')[0];
+            const count = byWeek.get(key) || 0;
+            if (count >= targetPerWeek) {
+                streak += 1;
+                weekStart.setDate(weekStart.getDate() - 7);
+            } else {
+                break;
+            }
+        }
+        return streak;
+    };
+
+    const handleAddHabit = (input: { title: string; cadence: 'daily' | 'weekly'; targetPerWeek?: number; reminder?: boolean }) => {
+        const newHabit: Habit = {
+            id: Date.now().toString(),
+            title: input.title.trim(),
+            cadence: input.cadence,
+            targetPerWeek: input.cadence === 'weekly' ? (input.targetPerWeek || 1) : undefined,
+            reminder: input.reminder,
+            streak: 0,
+            history: [],
+            createdAt: new Date().toISOString(),
+        };
+        setHabits(prev => [...prev, newHabit]);
+    };
+
+    const handleToggleHabitToday = (habitId: string) => {
+        const today = getLocalDateString();
+        setHabits(prev => prev.map(h => {
+            if (h.id !== habitId) return h;
+            const hasToday = h.history.includes(today);
+            const newHistory = hasToday ? h.history.filter(d => d !== today) : [...h.history, today];
+            // Recompute streak
+            const datesSet = new Set(newHistory);
+            let streak = 0;
+            if (h.cadence === 'daily') {
+                streak = computeDailyStreak(datesSet, today);
+            } else {
+                streak = computeWeeklyStreak(newHistory, h.targetPerWeek || 1, today);
+            }
+            return { ...h, history: newHistory, lastDoneDate: hasToday ? undefined : today, streak };
+        }));
+    };
+
+    const handleDeleteHabit = (habitId: string) => {
+        setHabits(prev => prev.filter(h => h.id !== habitId));
+    };
 
     // Manual study plan generation handler
     const handleGenerateStudyPlan = async () => {
@@ -2728,6 +2829,10 @@ function App() {
                             onSelectTask={handleSelectTask}
                             onGenerateStudyPlan={handleGenerateStudyPlan}
                             hasCompletedTutorial={localStorage.getItem('timepilot-interactive-tutorial-complete') === 'true'}
+                            habits={habits}
+                            onAddHabit={handleAddHabit}
+                            onToggleHabitToday={handleToggleHabitToday}
+                            onDeleteHabit={handleDeleteHabit}
                         />
                     )}
                     {showOnboarding && (
@@ -3325,7 +3430,7 @@ function App() {
                                         </h4>
                                         <div className="space-y-1 text-xs text-gray-600 dark:text-gray-400">
                                             <div className="flex items-center space-x-2">
-                                                <span className="text-green-500">✅</span>
+                                                <span className="text-green-500">���</span>
                                                 <span>New features and improvements</span>
                                             </div>
                                             <div className="flex items-center space-x-2">
@@ -3406,6 +3511,8 @@ function App() {
                         onDismiss={() => setMotivationalToast(null)}
                     />
                 )}
+
+                <PWAInstallPrompt />
 
             </div>
         </div>
