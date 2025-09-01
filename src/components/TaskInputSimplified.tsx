@@ -750,7 +750,6 @@ const TaskInputSimplified: React.FC<TaskInputProps> = ({ onAddTask, onCancel, us
                         type="number"
                         min="0"
                         max="59"
-                        step="15"
                         value={sessionData.sessionMinutes}
                         onChange={e => {
                           const value = e.target.value;
