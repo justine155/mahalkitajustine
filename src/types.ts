@@ -108,6 +108,18 @@ export interface StudyPlan {
   isOverloaded?: boolean; // Is this day too packed?
 }
 
+export interface Habit {
+  id: string;
+  title: string;
+  cadence: 'daily' | 'weekly';
+  targetPerWeek?: number; // for weekly cadence
+  reminder?: boolean;
+  streak: number;
+  lastDoneDate?: string; // YYYY-MM-DD
+  history: string[]; // dates done (YYYY-MM-DD)
+  createdAt: string;
+}
+
 export interface DateSpecificStudyWindow {
   date: string; // YYYY-MM-DD format
   startHour: number; // 0-23
