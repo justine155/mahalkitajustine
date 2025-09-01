@@ -54,7 +54,8 @@ export default function PWAInstallPrompt() {
   }
 
   return (
-    <div className="fixed bottom-4 left-4 right-4 bg-blue-600 text-white rounded-lg shadow-lg p-4 flex items-center gap-3 z-50 max-w-md mx-auto">
+    <div className="fixed left-4 right-4 bg-blue-600 text-white rounded-lg shadow-lg p-4 flex items-center gap-3 z-50 max-w-md mx-auto"
+         style={{ bottom: 'max(1rem, env(safe-area-inset-bottom))' }}>
       <Download size={20} />
       <div className="flex-1">
         <p className="font-medium">Install TimePilot</p>
