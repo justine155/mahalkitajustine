@@ -324,7 +324,8 @@ const TaskInputSimplified: React.FC<TaskInputProps> = ({ onAddTask, onCancel, us
       totalTimeNeeded: formData.totalTimeNeeded ? parseFloat(formData.totalTimeNeeded) : undefined,
       isOneTimeTask: formData.isOneTimeTask,
       startDate: formData.startDate || today,
-      maxSessionLength: 2, // Default max session length
+      sessionDuration: estimationMode === 'session' ? ((parseInt(sessionData.sessionHours) || 0) + (parseInt(sessionData.sessionMinutes) || 0) / 60) : undefined,
+      maxSessionLength: 2,
     });
     setShowValidationErrors(false);
     // Reset form
