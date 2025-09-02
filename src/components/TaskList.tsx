@@ -308,6 +308,29 @@ const TaskList: React.FC<TaskListProps> = ({ tasks, studyPlans = [], onUpdateTas
       isOneTimeTask: task.isOneTimeTask || false,
     });
 
+    // Detect original estimation method based on sessionDuration field
+    if (task.sessionDuration && task.sessionDuration > 0) {
+      // Task was created using session-based estimation
+      setEstimationMode('session');
+
+      // Convert sessionDuration back to hours and minutes
+      const sessionTotalMinutes = Math.round(task.sessionDuration * 60);
+      const sessionHours = Math.floor(sessionTotalMinutes / 60);
+      const sessionMinutes = sessionTotalMinutes % 60;
+
+      setSessionData({
+        sessionHours: sessionHours.toString(),
+        sessionMinutes: sessionMinutes.toString()
+      });
+    } else {
+      // Task was created using total time estimation
+      setEstimationMode('total');
+      setSessionData({
+        sessionHours: '2',
+        sessionMinutes: '0'
+      });
+    }
+
     setEditFormData({
       title: task.title,
       description: task.description,
