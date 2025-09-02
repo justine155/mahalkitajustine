@@ -3,7 +3,7 @@ import { Calendar, CheckSquare, Clock, Settings as SettingsIcon, BarChart3, Cale
 import { Task, StudyPlan, UserSettings, FixedCommitment, Commitment, StudySession, TimerState, Habit } from './types';
 import { GamificationData, Achievement, DailyChallenge, MotivationalMessage } from './types-gamification';
 import { useRobustTimer, startTimer, pauseTimer, resumeTimer, resetTimer, updateTimerTime } from './hooks/useRobustTimer';
-import { getUnscheduledMinutesForTasks, getLocalDateString, checkCommitmentConflicts, generateNewStudyPlan, generateNewStudyPlanWithPreservation, reshuffleStudyPlan, markPastSessionsAsSkipped, formatTime } from './utils/scheduling';
+import { getUnscheduledMinutesForTasks, getLocalDateString, checkCommitmentConflicts, generateNewStudyPlan, generateNewStudyPlanWithPreservation, generateNewStudyPlanPreservingFixedOnly, reshuffleStudyPlan, markPastSessionsAsSkipped, formatTime } from './utils/scheduling';
 import { getAccurateUnscheduledTasks, shouldShowNotifications, getNotificationPriority } from './utils/enhanced-notifications';
 import { enhancedEstimationTracker } from './utils/enhanced-estimation-tracker';
 import {
@@ -892,85 +892,16 @@ function App() {
     const handleRefreshStudyPlan = (preserveManualReschedules: boolean) => {
         if (tasks.length > 0) {
             try {
-                // Generate new study plan
                 const result = preserveManualReschedules
                     ? generateNewStudyPlanWithPreservation(tasks, settings, getAllCommitmentsForScheduling(), studyPlans)
-                    : generateNewStudyPlan(tasks, settings, getAllCommitmentsForScheduling(), studyPlans);
+                    : generateNewStudyPlanPreservingFixedOnly(tasks, settings, getAllCommitmentsForScheduling(), studyPlans);
                 const newPlans = result.plans;
-
-                if (preserveManualReschedules) {
-                    // Enhanced preservation logic
-                    newPlans.forEach(plan => {
-                        const prevPlan = studyPlans.find(p => p.date === plan.date);
-                        if (!prevPlan) return;
-
-                        plan.plannedTasks.forEach(session => {
-                            const prevSession = prevPlan.plannedTasks.find(s =>
-                                s.taskId === session.taskId && s.sessionNumber === session.sessionNumber
-                            );
-                            if (prevSession) {
-                                // Preserve done sessions
-                                if (prevSession.done) {
-                                    session.done = true;
-                                    session.status = prevSession.status;
-                                    session.actualHours = prevSession.actualHours;
-                                    session.completedAt = prevSession.completedAt;
-                                }
-                                // Preserve skipped sessions
-                                else if (prevSession.status === 'skipped') {
-                                    session.status = 'skipped';
-                                }
-                                // Preserve manual reschedules
-                                else if (prevSession.originalTime && prevSession.originalDate && prevSession.isManualOverride) {
-                                    session.originalTime = prevSession.originalTime;
-                                    session.originalDate = prevSession.originalDate;
-                                    session.startTime = prevSession.startTime;
-                                    session.endTime = prevSession.endTime;
-                                    session.rescheduledAt = prevSession.rescheduledAt;
-                                    session.isManualOverride = prevSession.isManualOverride;
-                                }
-                                // Preserve other rescheduled sessions (but allow regeneration of times)
-                                else if (prevSession.originalTime && prevSession.originalDate) {
-                                    session.originalTime = prevSession.originalTime;
-                                    session.originalDate = prevSession.originalDate;
-                                    session.rescheduledAt = prevSession.rescheduledAt;
-                                    session.isManualOverride = prevSession.isManualOverride;
-                                }
-                            }
-                        });
-                    });
-                } else {
-                    // Only preserve done and skipped sessions, reset manual reschedules
-                    newPlans.forEach(plan => {
-                        const prevPlan = studyPlans.find(p => p.date === plan.date);
-                        if (!prevPlan) return;
-
-                        plan.plannedTasks.forEach(session => {
-                            const prevSession = prevPlan.plannedTasks.find(s =>
-                                s.taskId === session.taskId && s.sessionNumber === session.sessionNumber
-                            );
-                            if (prevSession) {
-                                // Preserve done sessions
-                                if (prevSession.done) {
-                                    session.done = true;
-                                    session.status = prevSession.status;
-                                    session.actualHours = prevSession.actualHours;
-                                    session.completedAt = prevSession.completedAt;
-                                }
-                                // Preserve skipped sessions
-                                else if (prevSession.status === 'skipped') {
-                                    session.status = 'skipped';
-                                }
-                            }
-                        });
-                    });
-                }
 
                 setStudyPlans(newPlans);
                 setLastPlanStaleReason("task");
                 setNotificationMessage(preserveManualReschedules ?
                     'Study plan refreshed! Manual reschedules preserved.' :
-                    'Study plan refreshed! All sessions optimally rescheduled.'
+                    'Study plan refreshed! All sessions optimally rescheduled (completed/skipped preserved).'
                 );
                 setTimeout(() => setNotificationMessage(''), 5000);
             } catch (error) {
@@ -2870,6 +2801,7 @@ function App() {
                             )}
                             <TaskList
                                 tasks={tasks}
+                                studyPlans={studyPlans}
                                 onUpdateTask={handleUpdateTask}
                                 onDeleteTask={handleDeleteTask}
                                 autoRemovedTasks={autoRemovedTasks}
