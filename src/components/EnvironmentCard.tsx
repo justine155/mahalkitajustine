@@ -94,10 +94,8 @@ const EnvironmentCard: React.FC = () => {
     if (cachedRaw) {
       try {
         const cached: EnvData = JSON.parse(cachedRaw);
-        if (cached.fetchedAt && Date.now() - cached.fetchedAt < WEATHER_TTL_MS) {
-          setData(cached);
-          setLoading(false);
-        }
+        // Always hydrate from cache immediately as a fallback, even if stale
+        setData(cached);
       } catch {}
     }
   }, []);
@@ -107,6 +105,10 @@ const EnvironmentCard: React.FC = () => {
       try {
         setLoading(true);
         setError(null);
+
+        // Read any cached payload to preserve UI if network/geolocation fails
+        let cached: EnvData | null = null;
+        try { cached = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); } catch {}
 
         let lat: number | undefined;
         let lon: number | undefined;
@@ -121,10 +123,15 @@ const EnvironmentCard: React.FC = () => {
           lat = pos.coords.latitude;
           lon = pos.coords.longitude;
         } catch (geoErr) {
-          // Gracefully handle denied/unavailable geolocation; persist minimal cache to prevent repeated attempts for TTL
+          // Gracefully handle denied/unavailable geolocation
           const minimal = { timezone: tzFromDevice, fetchedAt: Date.now() } as EnvData;
-          setData(minimal);
-          try { localStorage.setItem(CACHE_KEY, JSON.stringify(minimal)); } catch {}
+          // Prefer existing cached data over minimal fallback
+          if (cached) {
+            setData(cached);
+          } else {
+            setData(minimal);
+            try { localStorage.setItem(CACHE_KEY, JSON.stringify(minimal)); } catch {}
+          }
           setError('Location permission denied or unavailable');
           setLoading(false);
           return;
@@ -158,8 +165,13 @@ const EnvironmentCard: React.FC = () => {
           if ((!city || !country)) {
             localStorage.setItem('timepilot-env-net-disabled-until', String(Date.now() + 30 * 60 * 1000));
             const minimal = { timezone: timezone || tzFromDevice, fetchedAt: Date.now() } as EnvData;
-            setData(minimal);
-            try { localStorage.setItem(CACHE_KEY, JSON.stringify(minimal)); } catch {}
+            // Prefer cached display
+            if (cached) {
+              setData(cached);
+            } else {
+              setData(minimal);
+              try { localStorage.setItem(CACHE_KEY, JSON.stringify(minimal)); } catch {}
+            }
             setError('Location lookup blocked');
             setLoading(false);
             return;
@@ -208,18 +220,49 @@ const EnvironmentCard: React.FC = () => {
       }
     };
 
-    // Only fetch once per app reload (session). Use minimal cache otherwise.
+    // Session gating: only skip fetch if we already fetched this session AND cache is still fresh
     const sessionFetched = sessionStorage.getItem(SESSION_KEY) === '1';
     const disabledUntil = parseInt(localStorage.getItem('timepilot-env-net-disabled-until') || '0', 10);
+    let cached: EnvData | null = null;
+    try { cached = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); } catch {}
+    const cacheIsFresh = !!(cached && cached.fetchedAt && (Date.now() - cached.fetchedAt < WEATHER_TTL_MS));
 
-    if (sessionFetched || (disabledUntil && Date.now() < disabledUntil)) {
+    if (disabledUntil && Date.now() < disabledUntil) {
       setLoading(false);
       return;
     }
 
-    fetchEnv().finally(() => {
+    // Detect restricted preview hosts where cross-origin fetches are commonly blocked
+    const host = (typeof window !== 'undefined' && window.location && window.location.hostname) ? window.location.hostname : '';
+    const isRestrictedHost = /(?:\.fly\.dev|\.vercel\.app|\.netlify\.app)$/i.test(host);
+    const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+
+    if (isRestrictedHost || offline) {
+      // Do not attempt network calls; rely on cache or minimal fallback
+      let cached: EnvData | null = null;
+      try { cached = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); } catch {}
+      if (cached) {
+        setData(cached);
+      } else {
+        const minimal = { timezone: tzFromDevice, fetchedAt: Date.now() } as EnvData;
+        setData(minimal);
+        try { localStorage.setItem(CACHE_KEY, JSON.stringify(minimal)); } catch {}
+      }
+      // Backoff further attempts for this session
       try { sessionStorage.setItem(SESSION_KEY, '1'); } catch {}
-    });
+      localStorage.setItem('timepilot-env-net-disabled-until', String(Date.now() + 60 * 60 * 1000));
+      setError('Network unavailable in preview environment');
+      setLoading(false);
+      return;
+    }
+
+    if (!sessionFetched || !cacheIsFresh) {
+      fetchEnv().finally(() => {
+        try { sessionStorage.setItem(SESSION_KEY, '1'); } catch {}
+      });
+    } else {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
