@@ -1,10 +1,11 @@
 import React, { useState, useMemo } from 'react';
 import { BookOpen, Edit, Trash2, CheckCircle2, X, Info, ChevronDown, ChevronUp, ArrowUpDown, ArrowUp, ArrowDown, HelpCircle } from 'lucide-react';
-import { Task, UserSettings } from '../types';
+import { Task, UserSettings, StudyPlan } from '../types';
 import { formatTime, calculateSessionDistribution } from '../utils/scheduling';
 
 interface TaskListProps {
   tasks: Task[];
+  studyPlans?: StudyPlan[];
   onUpdateTask: (taskId: string, updates: Partial<Task>) => void;
   onDeleteTask: (taskId: string) => void;
   autoRemovedTasks?: string[];
@@ -23,7 +24,7 @@ type EditFormData = Partial<Task> & {
   isOneTimeTask?: boolean;
 };
 
-const TaskList: React.FC<TaskListProps> = ({ tasks, onUpdateTask, onDeleteTask, autoRemovedTasks = [], onDismissAutoRemovedTask, userSettings }) => {
+const TaskList: React.FC<TaskListProps> = ({ tasks, studyPlans = [], onUpdateTask, onDeleteTask, autoRemovedTasks = [], onDismissAutoRemovedTask, userSettings }) => {
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editFormData, setEditFormData] = useState<EditFormData>({});
   const [showCompletedTasks, setShowCompletedTasks] = useState(false);
@@ -35,6 +36,8 @@ const TaskList: React.FC<TaskListProps> = ({ tasks, onUpdateTask, onDeleteTask, 
     sessionHours: '2',
     sessionMinutes: '0'
   });
+  // Track original values for validation logic
+  const [originalEditSnapshot, setOriginalEditSnapshot] = useState<{ startDate?: string; totalHours: number; isOneTimeTask?: boolean } | null>(null);
 
   // Sorting state with localStorage persistence
   const [sortBy, setSortBy] = useState<'deadline' | 'startDate' | 'createdAt'>(() => {
@@ -211,7 +214,15 @@ const TaskList: React.FC<TaskListProps> = ({ tasks, onUpdateTask, onDeleteTask, 
 
     if (!editFormData.impact) errors.push('Please select task importance');
     if (editFormData.deadline && editFormData.deadline < today) errors.push('Deadline cannot be in the past');
-    // Start date validation removed for editing tasks - tasks are already created
+
+    // If original start date is in the past and user changed estimation, require updating start date (for non one-sitting tasks)
+    const originalStartInPast = !!(originalEditSnapshot?.startDate && originalEditSnapshot.startDate < today);
+    const estimationChanged = originalEditSnapshot != null && Math.abs((originalEditSnapshot.totalHours || 0) - totalHours) > 1e-6;
+    const startStillPast = !!(editFormData.startDate && editFormData.startDate < today);
+    const requiresStartDateUpdate = originalStartInPast && estimationChanged && !editFormData.isOneTimeTask && startStillPast;
+    if (requiresStartDateUpdate) {
+      errors.push('Start date is in the past. Please update the start date to today or a future date to change the time estimate.');
+    }
 
     if (editFormData.category === 'Custom...' && (!editFormData.customCategory?.trim() || editFormData.customCategory.trim().length > 50)) {
       errors.push('Custom category must be between 1-50 characters');
@@ -290,6 +301,12 @@ const TaskList: React.FC<TaskListProps> = ({ tasks, onUpdateTask, onDeleteTask, 
     const hours = Math.floor(totalMinutes / 60);
     const minutes = totalMinutes % 60;
 
+    // Snapshot original values for validation checks
+    setOriginalEditSnapshot({
+      startDate: task.startDate,
+      totalHours: task.estimatedHours || 0,
+      isOneTimeTask: task.isOneTimeTask || false,
+    });
 
     setEditFormData({
       title: task.title,
@@ -323,7 +340,12 @@ const TaskList: React.FC<TaskListProps> = ({ tasks, onUpdateTask, onDeleteTask, 
 
     if (!editFormData.impact) return false;
     if (editFormData.deadline && editFormData.deadline < today) return false;
-    // Start date validation removed for editing tasks - tasks are already created
+
+    // If original start date is in the past and estimation changed, require updating start date (for non one-sitting tasks)
+    const originalStartInPast = !!(originalEditSnapshot?.startDate && originalEditSnapshot.startDate < today);
+    const estimationChanged = originalEditSnapshot != null && Math.abs((originalEditSnapshot.totalHours || 0) - totalHours) > 1e-6;
+    const startStillPast = !!(editFormData.startDate && editFormData.startDate < today);
+    if (originalStartInPast && estimationChanged && !editFormData.isOneTimeTask && startStillPast) return false;
 
     // Custom category validation (1-50 characters)
     if (editFormData.category === 'Custom...' && (!editFormData.customCategory?.trim() || editFormData.customCategory.trim().length > 50)) return false;
@@ -335,7 +357,7 @@ const TaskList: React.FC<TaskListProps> = ({ tasks, onUpdateTask, onDeleteTask, 
     }
 
     return true;
-  }, [editFormData, today, userSettings]);
+  }, [editFormData, today, userSettings, originalEditSnapshot]);
 
   const saveEdit = () => {
     if (editingTaskId && isEditFormValid) {
@@ -355,9 +377,11 @@ const TaskList: React.FC<TaskListProps> = ({ tasks, onUpdateTask, onDeleteTask, 
         isOneTimeTask: editFormData.isOneTimeTask,
         schedulingPreference: editFormData.schedulingPreference,
         startDate: editFormData.startDate || today,
+        sessionDuration: estimationMode === 'session' ? ((parseInt(sessionData.sessionHours) || 0) + (parseInt(sessionData.sessionMinutes) || 0) / 60) : undefined,
       });
       setEditingTaskId(null);
       setEditFormData({});
+      setOriginalEditSnapshot(null);
       setShowAdvancedOptions(false);
     }
   };
@@ -365,6 +389,7 @@ const TaskList: React.FC<TaskListProps> = ({ tasks, onUpdateTask, onDeleteTask, 
   const cancelEdit = () => {
     setEditingTaskId(null);
     setEditFormData({});
+    setOriginalEditSnapshot(null);
     setShowAdvancedOptions(false);
   };
 
@@ -517,7 +542,19 @@ const TaskList: React.FC<TaskListProps> = ({ tasks, onUpdateTask, onDeleteTask, 
                               onChange={(e) => setEditFormData({ ...editFormData, startDate: e.target.value || today })}
                               className="w-full px-3 py-2 border rounded-lg text-base focus:ring-2 focus:ring-blue-500 focus:border-transparent border-gray-300 bg-white dark:bg-gray-800 dark:text-white"
                             />
-                            {/* Start date validation warning removed for editing tasks */}
+                            {/* Inline guidance when required */}
+                            {(() => {
+                              const totalHours = getEffectiveTotalTime();
+                              const originalStartInPast = !!(originalEditSnapshot?.startDate && originalEditSnapshot.startDate < today);
+                              const estimationChanged = originalEditSnapshot != null && Math.abs((originalEditSnapshot.totalHours || 0) - totalHours) > 1e-6;
+                              const startStillPast = !!(editFormData.startDate && editFormData.startDate < today);
+                              if (originalStartInPast && estimationChanged && startStillPast) {
+                                return (
+                                  <div className="text-amber-600 text-xs mt-1">Start date is in the past. Update it to today or a future date to change the time estimate.</div>
+                                );
+                              }
+                              return null;
+                            })()}
                           </div>
                         )}
                       </div>
@@ -931,52 +968,110 @@ const TaskList: React.FC<TaskListProps> = ({ tasks, onUpdateTask, onDeleteTask, 
                   <div className="space-y-3">
                     <div className="flex items-start justify-between">
                       <div className="flex-1 min-w-0">
-                      <div className="flex items-center space-x-2 mb-2">
+                      <div className="flex items-center gap-2 mb-1">
                         <h3 className="text-base sm:text-lg font-semibold text-gray-800 dark:text-white truncate">
                           {task.title}
                         </h3>
                         {task.importance && (
-                            <span className="text-xs bg-red-100 text-red-800 px-2 py-1 rounded-full dark:bg-red-900 dark:text-red-200 flex-shrink-0">
+                          <span className="text-[10px] bg-red-100 text-red-800 px-2 py-0.5 rounded-full dark:bg-red-900 dark:text-red-200 flex-shrink-0">
                             Important
                           </span>
                         )}
-                        </div>
-                        
-                        <div className="space-y-2">
-                        {task.subject && (
-                            <div className="flex items-center space-x-2 text-sm text-gray-600 dark:text-gray-300">
-                              <span className="font-medium"></span>
-                              <span className="truncate">{task.subject}</span>
-                            </div>
-                          )}
-                          
-                          <div className="flex items-center space-x-2 text-sm text-gray-600 dark:text-gray-300">
-                            <span className="font-medium"></span>
-                            <span>{formatTime(task.estimatedHours)}</span>
-                          </div>
-                          
-                          {task.deadline && (
-                            <div className="flex items-center space-x-2 text-sm">
-                              <span className="font-medium"></span>
-                              <span className={`${getUrgencyColor(task.deadline)}`}>
-                                Due: {new Date(task.deadline).toLocaleDateString()}
+                        {(() => {
+                          const sessions = studyPlans.flatMap(p => p.plannedTasks.filter(s => s.taskId === task.id));
+                          const total = sessions.length;
+                          const completed = sessions.filter(s => s.done || s.status === 'completed').length;
+                          const skipped = sessions.filter(s => s.status === 'skipped').length;
+                          const started = completed + skipped;
+                          const hasStarted = started > 0;
+                          return (
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full ${hasStarted ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200' : 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'}`}>
+                              {hasStarted ? 'In Progress' : 'Not Started'}
                             </span>
-                            </div>
-                          )}
-                          
+                          );
+                        })()}
                         {task.category && (
-                            <div className="flex items-center space-x-2">
-                              <span className={`text-xs px-2 py-1 rounded-full ${getCategoryColor(task.category)}`}>
+                          <span className={`text-[10px] px-2 py-0.5 rounded-full ${getCategoryColor(task.category)}`}>
                             {task.category}
                           </span>
+                        )}
+                      </div>
+
+                        <div className="mt-1 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <div>
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-600 dark:text-gray-300">
+                              {task.startDate && <span>Start {new Date(task.startDate).toLocaleDateString()}</span>}
                             </div>
-                          )}
-                          
-                        {task.description && (
-                            <p className="text-sm text-gray-600 dark:text-gray-300 line-clamp-2">
-                            {task.description}
-                          </p>
-                          )}
+
+                            {(() => {
+                              const sessions = studyPlans.flatMap(p => p.plannedTasks.filter(s => s.taskId === task.id));
+                              const total = sessions.length;
+                              if (total === 0) return null;
+                              const completed = sessions.filter(s => s.done || s.status === 'completed').length;
+                              const skipped = sessions.filter(s => s.status === 'skipped').length;
+                              const started = completed + skipped;
+                              const pct = Math.round((started / total) * 100);
+                              return (
+                                <div className="mt-1 flex items-center gap-2">
+                                  <div className="w-24 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                                    <div className="h-full bg-blue-500 dark:bg-blue-400" style={{ width: `${pct}%` }} />
+                                  </div>
+                                  <span className="text-[11px] text-gray-500 dark:text-gray-400">{started}/{total}</span>
+                                </div>
+                              );
+                            })()}
+
+                            {task.description && (
+                              <p className="text-xs text-gray-600 dark:text-gray-300 line-clamp-1 mt-1">
+                                {task.description}
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex flex-col items-start sm:items-end gap-1">
+                            <div className="flex flex-wrap items-center gap-2 text-xs">
+                              {task.deadline && (
+                                <span className={`${getUrgencyColor(task.deadline)}`}>
+                                  Due {new Date(task.deadline).toLocaleDateString()}
+                                </span>
+                              )}
+                              {task.deadline && (() => {
+                                const deadline = new Date(task.deadline);
+                                const now = new Date();
+                                const daysUntil = Math.ceil((deadline.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+                                const cls = daysUntil <= 0
+                                  ? 'text-red-600 dark:text-red-400'
+                                  : daysUntil <= 3
+                                    ? 'text-yellow-600 dark:text-yellow-400'
+                                    : 'text-gray-500 dark:text-gray-400';
+                                return (
+                                  <span className={cls}>
+                                    {daysUntil <= 0 ? 'Overdue' : daysUntil === 1 ? 'Due tomorrow' : `Due in ${daysUntil} days`}
+                                  </span>
+                                );
+                              })()}
+                            </div>
+                            <div className="flex flex-wrap items-center gap-3 text-xs text-gray-600 dark:text-gray-300">
+                              <span>{formatTime(task.estimatedHours)}</span>
+                              {(() => {
+                                let sd: number | null = null;
+                                if (typeof task.sessionDuration === 'number' && task.sessionDuration > 0) {
+                                  sd = task.sessionDuration;
+                                } else {
+                                  const sessions = studyPlans.flatMap(p => p.plannedTasks.filter(s => s.taskId === task.id));
+                                  if (sessions.length > 0) {
+                                    const durations = sessions.map(s => s.allocatedHours).sort((a,b)=>a-b);
+                                    const mid = Math.floor(durations.length/2);
+                                    sd = durations.length % 2 ? durations[mid] : (durations[mid-1]+durations[mid])/2;
+                                  }
+                                }
+                                if (!sd) return null;
+                                const hrs = Math.floor(sd);
+                                const mins = Math.round((sd - hrs) * 60);
+                                const label = hrs > 0 && mins > 0 ? `${hrs}h ${mins}m` : hrs > 0 ? `${hrs}h` : `${mins}m`;
+                                return <span className="text-gray-500 dark:text-gray-400">Session {label}</span>;
+                              })()}
+                            </div>
+                          </div>
                         </div>
                       </div>
                       
