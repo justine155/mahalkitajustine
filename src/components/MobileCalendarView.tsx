@@ -446,7 +446,7 @@ const MobileCalendarView: React.FC<MobileCalendarViewProps> = ({
         plannedTasks: [newSession],
         totalStudyHours: sessionDuration,
         isOverloaded: false,
-        availableHours: getDaySpecificDailyHours(newPlanDate, settings)
+        availableHours: getDaySpecificDailyHours(targetDate, settings)
       });
 
       const originalPlanIndex = updatedPlans.findIndex(plan => plan.date === originalDate);
