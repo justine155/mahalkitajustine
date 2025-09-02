@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { Calendar, momentLocalizer, Views } from 'react-big-calendar';
 import withDragAndDrop from 'react-big-calendar/lib/addons/dragAndDrop';
 import { DndProvider } from 'react-dnd';
@@ -158,8 +158,6 @@ const CalendarView: React.FC<CalendarViewProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [dragFeedback, setDragFeedback] = useState<string>('');
   const [showInfoModal, setShowInfoModal] = useState(false);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const [nowLineTop, setNowLineTop] = useState<number | null>(null);
 
 
   // Persist calendar view to localStorage
@@ -791,7 +789,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({
           modifiedOccurrences: updatedModifiedOccurrences
         });
 
-        setDragFeedback(`�� Commitment moved to ${newStartTime} - ${newEndTime} on ${moment(targetDate).format('MMM D')}`);
+        setDragFeedback(`✅ Commitment moved to ${newStartTime} - ${newEndTime} on ${moment(targetDate).format('MMM D')}`);
         setTimeout(() => setDragFeedback(''), 3000);
         return;
       }
@@ -930,7 +928,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({
         plannedTasks: [newSession],
         totalStudyHours: sessionDuration,
         isOverloaded: false,
-        availableHours: getDaySpecificDailyHours(targetDate, settings)
+        availableHours: getDaySpecificDailyHours(newPlanDate, settings)
       });
 
       // Also remove from original plan if it exists
@@ -1572,14 +1570,12 @@ const CalendarView: React.FC<CalendarViewProps> = ({
       />
 
       <div
-        ref={containerRef}
         style={{
-          height: currentView === 'month' ? '900px' : '600px',
+          height: '600px',
           borderRadius: '1.5rem',
           overflow: 'hidden',
           background: 'rgba(255,255,255,0.95)',
           boxShadow: '0 4px 24px rgba(80,80,180,0.07)',
-          position: 'relative'
         }}
         className="calendar-grid-container dark:bg-gray-900 dark:bg-opacity-95"
       >
@@ -1608,12 +1604,6 @@ const CalendarView: React.FC<CalendarViewProps> = ({
             }
             min={minTime}
             max={maxTime}
-            popup
-            popupOffset={{ x: 10, y: 10 }}
-            onShowMore={(events, date) => {
-              // Ensure navigate still updates our date when show more is clicked
-              setCurrentDate(date as Date);
-            }}
             onSelectEvent={(event: any) => handleSelectEvent(event as CalendarEvent)}
             eventPropGetter={(event: any, start: Date, end: Date, isSelected: boolean) => eventStyleGetter(event as CalendarEvent, start, end, isSelected)}
             formats={{
@@ -1657,38 +1647,18 @@ const CalendarView: React.FC<CalendarViewProps> = ({
             onDragStart={handleDragStart}
           />
         )}
-        {(nowLineTop !== null) && (currentView === 'day' || currentView === 'week') && (
-          <div
-            style={{
-              position: 'absolute',
-              top: nowLineTop,
-              left: 0,
-              right: 0,
-              height: 0,
-              borderTop: '2px solid #ef4444',
-              zIndex: 10,
-              pointerEvents: 'none'
-            }}
-          />
-        )}
       </div>
       {/* Add custom CSS for thicker interval lines and better spacing */}
       <style>{`
-        /* Zebra half-hours */
-        .rbc-time-view .rbc-timeslot-group .rbc-time-slot:nth-child(even) { background-color: rgba(99,102,241,0.04); }
-        .dark .rbc-time-view .rbc-timeslot-group .rbc-time-slot:nth-child(even) { background-color: rgba(99,102,241,0.08); }
-
         .rbc-time-slot {
-          border-bottom: 1px solid #e5e7eb !important;
+          border-bottom: 2px solid #e0e7ef !important;
         }
         .dark .calendar-grid-container {
           background: rgba(24,24,27,0.95) !important;
         }
-        .dark .rbc-time-slot { border-bottom: 1px solid #374151 !important; }
-
-        /* Sticky time gutter */
-        .rbc-time-gutter { position: sticky; left: 0; z-index: 3; background: rgba(255,255,255,0.9); backdrop-filter: saturate(120%) blur(2px); }
-        .dark .rbc-time-gutter { background: rgba(17,24,39,0.9); }
+        .dark .rbc-time-slot {
+          border-bottom: 2px solid #27272a !important;
+        }
         .dark .rbc-month-row, .dark .rbc-month-view, .dark .rbc-header, .dark .rbc-time-header, .dark .rbc-timeslot-group, .dark .rbc-time-content {
           background-color: #18181b !important;
         }
@@ -1704,149 +1674,93 @@ const CalendarView: React.FC<CalendarViewProps> = ({
         .dark .rbc-label, .dark .rbc-header, .dark .rbc-date-cell, .dark .rbc-timeslot-group, .dark .rbc-time-gutter, .dark .rbc-time-header-content {
           color: #e5e7eb !important;
         }
-
-        /* Month view aesthetics */
-        .rbc-month-view .rbc-header {
-          background: linear-gradient(180deg, #f8fafc, #eef2ff) !important;
-          font-weight: 600 !important;
-          color: #334155 !important;
-          border-bottom: 1px solid #e5e7eb !important;
-        }
-        .dark .rbc-month-view .rbc-header {
-          background: linear-gradient(180deg, #0b1220, #111827) !important;
-          color: #e5e7eb !important;
-          border-bottom: 1px solid #374151 !important;
-        }
-        .rbc-month-view .rbc-date-cell {
-          padding: 6px 8px !important;
-          font-weight: 600 !important;
-        }
-        .rbc-month-view .rbc-date-cell .rbc-button-link {
-          padding: 2px 6px !important;
-          border-radius: 8px !important;
-        }
-        .rbc-today {
-          background: rgba(59,130,246,0.08) !important;
-        }
-        .dark .rbc-today {
-          background: rgba(37,99,235,0.12) !important;
-        }
-        .rbc-month-row {
-          border-bottom: 1px solid #e5e7eb !important;
-        }
-        .dark .rbc-month-row {
-          border-bottom: 1px solid #374151 !important;
-        }
-        .rbc-show-more {
-          margin: 2px 4px !important;
-          padding: 2px 6px !important;
-          border-radius: 6px !important;
-          background: #eef2ff !important;
-          color: #4338ca !important;
-          font-size: 11px !important;
-        }
-        .dark .rbc-show-more {
-          background: #1f2937 !important;
-          color: #a78bfa !important;
-        }
-        .rbc-month-view .rbc-event {
-          margin: 2px 4px !important;
-          padding: 1px 6px !important;
-          border-radius: 8px !important;
-          font-size: 11px !important;
-          line-height: 1.2 !important;
-        }
-        .rbc-overlay {
-          border-radius: 10px !important;
-          box-shadow: 0 10px 24px rgba(0,0,0,0.15) !important;
-        }
-
+        
         /* Dynamic spacing based on interval size */
         .rbc-time-view .rbc-timeslot-group {
           min-height: 24px !important;
         }
-
+        
         /* Zoom-based time slot heights */
         .rbc-time-slot {
           min-height: 24px !important;
         }
-
+        
         /* More distinct hour grid lines */
         .rbc-time-slot:first-child {
           border-top: 3px solid #d1d5db !important;
         }
-
+        
         .rbc-time-slot:not(:first-child) {
           border-top: 1px solid #e5e7eb !important;
         }
-
+        
         /* Dark mode hour grid lines */
         .dark .rbc-time-slot:first-child {
           border-top: 3px solid #4b5563 !important;
         }
-
+        
         .dark .rbc-time-slot:not(:first-child) {
           border-top: 1px solid #374151 !important;
         }
-
+        
         /* Ensure events have minimum height for readability */
         .rbc-event {
           min-height: 22px !important;
           min-width: 60px !important;
         }
-
+        
         /* Better text sizing for event blocks */
         .rbc-event .text-sm {
           font-size: 12px !important;
           line-height: 1.3 !important;
         }
-
+        
         /* Enhanced time gutter for zoomed views */
         .rbc-time-gutter {
           min-width: 60px !important;
           font-weight: 500 !important;
         }
-
+        
         /* Better visual separation for zoomed intervals */
         .rbc-time-header-content {
           border-bottom: 2px solid #e0e7ef !important;
         }
-
+        
         .dark .rbc-time-header-content {
           border-bottom: 2px solid #27272a !important;
         }
-
+        
         /* Darker styling for past days */
         .rbc-day-bg.rbc-off-range {
           background-color: #f8f9fa !important;
         }
-
+        
         .rbc-day-bg.rbc-off-range.rbc-past {
           background-color: #e9ecef !important;
         }
-
+        
         .rbc-day-bg.rbc-past {
           background-color: #f1f3f4 !important;
         }
-
+        
         /* Dark mode past days */
         .dark .rbc-day-bg.rbc-off-range {
           background-color: #1f2937 !important;
         }
-
+        
         .dark .rbc-day-bg.rbc-off-range.rbc-past {
           background-color: #111827 !important;
         }
-
+        
         .dark .rbc-day-bg.rbc-past {
           background-color: #1e293b !important;
         }
-
+        
         /* Past time slots in time view */
         .rbc-timeslot-group.rbc-past {
           background-color: #f8f9fa !important;
         }
-
+        
         .dark .rbc-timeslot-group.rbc-past {
           background-color: #1f2937 !important;
         }
@@ -1925,9 +1839,6 @@ const CalendarView: React.FC<CalendarViewProps> = ({
           border-left: 4px solid #22c55e !important;
         }
       `}</style>
-
-      {/* Now line updater */}
-      <NowLineUpdater containerRef={containerRef} view={currentView} minTime={minTime} maxTime={maxTime} onUpdate={setNowLineTop} />
 
       {/* Color Settings Modal */}
       {showColorSettings && (
@@ -2299,45 +2210,5 @@ const CalendarView: React.FC<CalendarViewProps> = ({
     </DndProvider>
   );
 };
-
-function NowLineUpdater({ containerRef, view, minTime, maxTime, onUpdate }: { containerRef: React.RefObject<HTMLDivElement>, view: string, minTime: Date, maxTime: Date, onUpdate: (pos: number | null) => void }) {
-  useEffect(() => {
-    if (!(view === 'day' || view === 'week')) { onUpdate(null); return; }
-
-    const compute = () => {
-      const container = containerRef.current;
-      if (!container) { onUpdate(null); return; }
-      const timeContent = container.querySelector('.rbc-time-content') as HTMLElement | null;
-      const header = container.querySelector('.rbc-time-header') as HTMLElement | null;
-      const daySlot = container.querySelector('.rbc-day-slot') as HTMLElement | null;
-      if (!timeContent || !header || !daySlot) { onUpdate(null); return; }
-
-      const now = new Date();
-      const minutesNow = now.getHours() * 60 + now.getMinutes();
-      const minutesMin = minTime.getHours() * 60 + minTime.getMinutes();
-      const minutesMax = maxTime.getHours() * 60 + maxTime.getMinutes();
-      if (minutesNow < minutesMin || minutesNow > minutesMax) { onUpdate(null); return; }
-
-      const ratio = (minutesNow - minutesMin) / (minutesMax - minutesMin);
-      const slotHeight = daySlot.scrollHeight;
-      const headerHeight = header.getBoundingClientRect().height;
-      const yInContent = ratio * slotHeight;
-      const scrollTop = timeContent.scrollTop;
-      const top = headerHeight + yInContent - scrollTop;
-      onUpdate(top);
-    };
-
-    compute();
-    const interval = setInterval(compute, 60000);
-    const scroller = containerRef.current?.querySelector('.rbc-time-content');
-    const onScroll = () => compute();
-    scroller?.addEventListener('scroll', onScroll, { passive: true });
-    return () => {
-      clearInterval(interval);
-      scroller?.removeEventListener('scroll', onScroll as any);
-    };
-  }, [containerRef, view, minTime, maxTime, onUpdate]);
-  return null;
-}
 
 export default CalendarView;
