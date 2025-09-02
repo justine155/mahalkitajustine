@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Clock, BookOpen, TrendingUp, Calendar, Bell, CheckCircle2, AlertTriangle, Clock3, X } from 'lucide-react';
+import { Clock, BookOpen, TrendingUp, Calendar, Bell, CheckCircle2, AlertTriangle, Clock3, X, ArrowUp, ArrowDown } from 'lucide-react';
 import { Task, StudyPlan } from '../types';
 import { formatTime, getLocalDateString, checkSessionStatus } from '../utils/scheduling';
 import SafePieChart from './SafePieChart';
@@ -166,6 +166,48 @@ const Dashboard: React.FC<DashboardProps> = ({ tasks, studyPlans, dailyAvailable
       color: 'bg-red-500'
     }
   ];
+
+  const [detailsSortBy, setDetailsSortBy] = useState<'deadline' | 'startDate' | 'createdAt'>(() => {
+    const saved = localStorage.getItem('timepilot-dashboard-details-sort-by');
+    return (saved as 'deadline' | 'startDate' | 'createdAt') || 'deadline';
+  });
+  const [detailsSortOrder, setDetailsSortOrder] = useState<'asc' | 'desc'>(() => {
+    const saved = localStorage.getItem('timepilot-dashboard-details-sort-order');
+    return (saved as 'asc' | 'desc') || 'asc';
+  });
+
+  React.useEffect(() => {
+    localStorage.setItem('timepilot-dashboard-details-sort-by', detailsSortBy);
+  }, [detailsSortBy]);
+  React.useEffect(() => {
+    localStorage.setItem('timepilot-dashboard-details-sort-order', detailsSortOrder);
+  }, [detailsSortOrder]);
+
+  const detailsTasks = useMemo(() => {
+    const list = tasks.filter(task => task.status !== 'completed');
+    return list.sort((a, b) => {
+      let aValue: string | Date;
+      let bValue: string | Date;
+      switch (detailsSortBy) {
+        case 'deadline':
+          aValue = a.deadline ? new Date(a.deadline) : (detailsSortOrder === 'asc' ? new Date('9999-12-31') : new Date('1970-01-01'));
+          bValue = b.deadline ? new Date(b.deadline) : (detailsSortOrder === 'asc' ? new Date('9999-12-31') : new Date('1970-01-01'));
+          break;
+        case 'startDate':
+          aValue = a.startDate ? new Date(a.startDate) : new Date(a.createdAt);
+          bValue = b.startDate ? new Date(b.startDate) : new Date(b.createdAt);
+          break;
+        case 'createdAt':
+          aValue = new Date(a.createdAt);
+          bValue = new Date(b.createdAt);
+          break;
+        default:
+          return 0;
+      }
+      const comparison = aValue < bValue ? -1 : aValue > bValue ? 1 : 0;
+      return detailsSortOrder === 'asc' ? comparison : -comparison;
+    });
+  }, [tasks, detailsSortBy, detailsSortOrder]);
 
   return (
     <div className="space-y-8">
@@ -469,11 +511,13 @@ const Dashboard: React.FC<DashboardProps> = ({ tasks, studyPlans, dailyAvailable
                   const isOverdue = sessionStatusResult === 'overdue';
                   const isRescheduled = session.isManualOverride;
                   
-                  // Calculate progress for this task
+                  // Calculate progress for this task (match TaskList: completed + skipped = started)
                   const allSessionsForTask = studyPlans.flatMap(plan => plan.plannedTasks).filter(s => s.taskId === task.id);
-                  const completedSessions = allSessionsForTask.filter(s => s.done).length;
+                  const completedSessions = allSessionsForTask.filter(s => s.done || s.status === 'completed').length;
+                  const skippedSessions = allSessionsForTask.filter(s => s.status === 'skipped').length;
+                  const startedSessions = completedSessions + skippedSessions;
                   const totalSessions = allSessionsForTask.length;
-                  const progressPercent = totalSessions > 0 ? (completedSessions / totalSessions) * 100 : 0;
+                  const progressPercent = totalSessions > 0 ? (startedSessions / totalSessions) * 100 : 0;
                   
                   // Enhanced color system for session status and importance
                   const statusColors = {
@@ -598,7 +642,7 @@ const Dashboard: React.FC<DashboardProps> = ({ tasks, studyPlans, dailyAvailable
                             style={{ width: `${progressPercent}%` }}
                           ></div>
                         </div>
-                        <div className="text-xs text-gray-500 text-right mt-1 dark:text-gray-400">{completedSessions} / {totalSessions} sessions</div>
+                        <div className="text-xs text-gray-500 text-right mt-1 dark:text-gray-400">{startedSessions} / {totalSessions} sessions</div>
                       </div>
                     </div>
                   );
@@ -642,13 +686,39 @@ const Dashboard: React.FC<DashboardProps> = ({ tasks, studyPlans, dailyAvailable
 
       {/* Task Progress Details */}
       <div className="bg-white rounded-xl shadow-lg p-6 dark:bg-gray-900 dark:shadow-gray-900">
-        <h2 className="text-xl font-semibold text-gray-800 mb-4 flex items-center space-x-2 dark:text-white">
-          <TrendingUp className="text-blue-600 dark:text-blue-400" size={24} />
-          <span>Task Progress Details</span>
-        </h2>
-        
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold text-gray-800 flex items-center space-x-2 dark:text-white">
+            <TrendingUp className="text-blue-600 dark:text-blue-400" size={24} />
+            <span>Task Progress Details</span>
+          </h2>
+          <div className="flex items-center space-x-2">
+            <span className="text-sm text-gray-600 dark:text-gray-400">Sort by:</span>
+            <select
+              value={detailsSortBy}
+              onChange={(e) => setDetailsSortBy(e.target.value as 'deadline' | 'startDate' | 'createdAt')}
+              className="text-sm border border-gray-300 rounded-lg px-2 py-1 bg-white dark:bg-gray-800 dark:text-white dark:border-gray-600 focus:ring-2 focus:ring-blue-500"
+              title="Choose how to sort tasks"
+            >
+              <option value="deadline">Deadline</option>
+              <option value="startDate">Start Date</option>
+              <option value="createdAt">Date Created</option>
+            </select>
+            <button
+              onClick={() => setDetailsSortOrder(detailsSortOrder === 'asc' ? 'desc' : 'asc')}
+              className="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors border border-transparent hover:border-gray-300 dark:hover:border-gray-600"
+              title={`Currently sorting ${detailsSortOrder === 'asc' ? 'earliest to latest' : 'latest to earliest'}. Click to reverse order.`}
+            >
+              {detailsSortOrder === 'asc' ? (
+                <ArrowUp size={16} className="text-gray-600 dark:text-gray-400" />
+              ) : (
+                <ArrowDown size={16} className="text-gray-600 dark:text-gray-400" />
+              )}
+            </button>
+          </div>
+        </div>
+
         <div className="space-y-4">
-          {tasks.filter(task => task.status !== 'completed').map((task) => {
+          {detailsTasks.map((task) => {
             // Calculate task-specific progress
             const allSessionsForTask = studyPlans.flatMap(plan => plan.plannedTasks).filter(s => s.taskId === task.id);
             const completedSessions = allSessionsForTask.filter(s => s.done || s.status === 'completed');
