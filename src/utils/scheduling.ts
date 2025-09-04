@@ -3761,6 +3761,51 @@ export const preserveManualSchedules = (
   return newPlans;
 };
 
+// Ensures that fixed sessions (completed/skipped) from existing plans remain intact
+// after any subsequent balancing/smoothing passes. If a fixed session is missing
+// in the new plans, it will be appended; if present, its status/timing/duration will be enforced.
+const preserveFixedSessionsPostProcessing = (
+  newPlans: StudyPlan[],
+  existingPlans: StudyPlan[]
+): StudyPlan[] => {
+  const result = newPlans.map(p => ({ ...p, plannedTasks: [...p.plannedTasks] }));
+
+  existingPlans.forEach(prevPlan => {
+    const targetPlan = result.find(p => p.date === prevPlan.date);
+    if (!targetPlan) return;
+
+    prevPlan.plannedTasks.forEach(prevSession => {
+      const isFixed = prevSession.done || prevSession.status === 'completed' || prevSession.status === 'skipped';
+      if (!isFixed) return;
+
+      const idx = targetPlan.plannedTasks.findIndex(s => s.taskId === prevSession.taskId && s.sessionNumber === prevSession.sessionNumber);
+      if (idx === -1) {
+        targetPlan.plannedTasks.push({ ...prevSession });
+        targetPlan.totalStudyHours = Math.round((targetPlan.totalStudyHours + prevSession.allocatedHours) * 60) / 60;
+      } else {
+        const session = targetPlan.plannedTasks[idx];
+        targetPlan.plannedTasks[idx] = {
+          ...session,
+          status: prevSession.status,
+          done: prevSession.done,
+          actualHours: prevSession.actualHours,
+          completedAt: prevSession.completedAt,
+          allocatedHours: prevSession.allocatedHours,
+          startTime: prevSession.startTime,
+          endTime: prevSession.endTime,
+          skipMetadata: prevSession.skipMetadata,
+          originalTime: prevSession.originalTime,
+          originalDate: prevSession.originalDate,
+          rescheduledAt: prevSession.rescheduledAt,
+          isManualOverride: prevSession.isManualOverride,
+        };
+      }
+    });
+  });
+
+  return result;
+};
+
 /**
  * Enhanced study plan generation that respects existing manual schedules
  * This function ensures that manually rescheduled sessions are treated as
@@ -4227,8 +4272,11 @@ export const generateNewStudyPlanWithPreservation = (
   // Apply final workload smoothing to minimize daily variation
   const smoothedPlans = applyWorkloadSmoothing(balancedPlans, tasks, settings, fixedCommitments);
 
+  // FINAL SAFETY PASS: ensure all previously completed/skipped sessions are preserved exactly as-is
+  const finalPlans = preserveFixedSessionsPostProcessing(smoothedPlans, existingStudyPlans);
+
   return {
-    plans: smoothedPlans,
+    plans: finalPlans,
     suggestions: result.suggestions
   };
 };
@@ -4244,5 +4292,6 @@ export const generateNewStudyPlanPreservingFixedOnly = (
   const preservedFixedOnly = preserveManualSchedules(result.plans, existingStudyPlans, { preserveManualReschedules: false });
   const balancedPlans = rebalanceAroundOneSittingTasks(preservedFixedOnly, tasks, settings, fixedCommitments);
   const smoothedPlans = applyWorkloadSmoothing(balancedPlans, tasks, settings, fixedCommitments);
-  return { plans: smoothedPlans, suggestions: result.suggestions };
+  const finalPlans = preserveFixedSessionsPostProcessing(smoothedPlans, existingStudyPlans);
+  return { plans: finalPlans, suggestions: result.suggestions };
 };
