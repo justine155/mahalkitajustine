@@ -737,19 +737,8 @@ const CalendarView: React.FC<CalendarViewProps> = ({
 
     const bufferTimeMs = (settings.bufferTimeBetweenSessions || 0) * 60 * 1000;
 
-    // Gather busy slots on target date (study sessions + other commitments except the moving instance)
+    // Gather busy slots on target date (only other commitments; allow overlap with study sessions)
     const busy: Array<{ start: Date; end: Date }> = [];
-
-    // Study sessions
-    studyPlans.forEach(plan => {
-      if (plan.date !== targetDate) return;
-      plan.plannedTasks.forEach(session => {
-        if (session.status === 'skipped' || !session.startTime || !session.endTime) return;
-        const s = moment(`${targetDate} ${session.startTime}`).toDate();
-        const e = moment(`${targetDate} ${session.endTime}`).toDate();
-        busy.push({ start: s, end: e });
-      });
-    });
 
     // Commitments
     fixedCommitments.forEach(c => {
@@ -762,9 +751,9 @@ const CalendarView: React.FC<CalendarViewProps> = ({
       const isAllDay = mod?.isAllDay ?? c.isAllDay;
       if (isAllDay) {
         // Block entire day
-        const dayStart = moment(`${targetDate} 00:00`).toDate();
-        const dayEnd = moment(`${targetDate} 23:59`).toDate();
-        busy.push({ start: dayStart, end: dayEnd });
+        const dayStartFull = moment(`${targetDate} 00:00`).toDate();
+        const dayEndFull = moment(`${targetDate} 23:59`).toDate();
+        busy.push({ start: dayStartFull, end: dayEndFull });
         return;
       }
       let startStr: string | undefined;
@@ -792,11 +781,9 @@ const CalendarView: React.FC<CalendarViewProps> = ({
 
     busy.sort((a, b) => a.start.getTime() - b.start.getTime());
 
-    // Boundaries using effective study window
-    const startHour = settings.studyWindowStartHour || 6;
-    const endHour = settings.studyWindowEndHour || 23;
-    const dayStart = moment(targetDate).hour(startHour).minute(0).second(0).toDate();
-    const dayEnd = moment(targetDate).hour(endHour).minute(0).second(0).toDate();
+    // Boundaries: full day (commitments can be outside study window)
+    const dayStart = moment(targetDate).hour(0).minute(0).second(0).toDate();
+    const dayEnd = moment(targetDate).hour(23).minute(59).second(59).toDate();
 
     const durMs = durationHours * 60 * 60 * 1000;
 
