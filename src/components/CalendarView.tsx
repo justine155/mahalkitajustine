@@ -579,8 +579,8 @@ const CalendarView: React.FC<CalendarViewProps> = ({
       // Check if this is a manual rescheduled session
       if (commitment.title.includes('(Manual Resched)')) {
         setSelectedManualSession(commitment);
-      } else if (commitment.countsTowardDailyHours && onSelectCommitment && commitmentDate === today) {
-        // Handle clicks on commitments that count toward daily hours - only for current day
+      } else if (onSelectCommitment && commitmentDate === today) {
+        // Handle clicks on commitments for current day: open timer
         const duration = moment(event.end).diff(moment(event.start), 'hours', true);
         onSelectCommitment(commitment, duration);
       }
