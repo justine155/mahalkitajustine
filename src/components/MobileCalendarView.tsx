@@ -319,11 +319,19 @@ const MobileCalendarView: React.FC<MobileCalendarViewProps> = ({
 
   // Handle click on a calendar event
   const handleEventClick = (event: CalendarEvent) => {
-    // Only show modal for study sessions, not commitments
+    const todayStr = moment().format('YYYY-MM-DD');
+    const eventDateStr = moment(event.start).format('YYYY-MM-DD');
+
     if (event.resource.type === 'study') {
       setSelectedEvent(event);
+      return;
     }
-    // Do nothing for commitments - remove the UI
+
+    if (event.resource.type === 'commitment' && onStartManualSession && eventDateStr === todayStr) {
+      const commitment = event.resource.data as FixedCommitment;
+      const durationSeconds = Math.max(0, moment(event.end).diff(moment(event.start), 'seconds'));
+      onStartManualSession(commitment, durationSeconds);
+    }
   };
 
   // Handle starting a manual commitment session from the detail modal
