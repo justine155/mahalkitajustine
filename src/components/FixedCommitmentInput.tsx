@@ -360,62 +360,6 @@ const FixedCommitmentInput: React.FC<FixedCommitmentInputProps> = ({
       }
     }
 
-    // Check daily capacity if commitment counts toward daily hours
-    if (formData.countsTowardDailyHours) {
-      const threshold = 0.5; // 30 minutes remaining threshold
-      const targetDates: string[] = [];
-
-      if (!formData.recurring) {
-        targetDates.push(...formData.specificDates);
-      } else {
-        // Compute next occurrence for each selected day
-        formData.daysOfWeek.forEach(dayOfWeek => {
-          const today = new Date();
-          const todayDayOfWeek = today.getDay();
-          const daysUntilTarget = (dayOfWeek - todayDayOfWeek + 7) % 7;
-          const targetDate = new Date(today);
-          targetDate.setDate(today.getDate() + (daysUntilTarget === 0 ? 7 : daysUntilTarget));
-          targetDates.push(targetDate.toISOString().split('T')[0]);
-        });
-      }
-
-      for (const date of targetDates) {
-        const plan = existingPlans.find(p => p.date === date);
-        const dailyCapacity = settings.dailyAvailableHours || 8;
-        const remaining = dailyCapacity - (plan?.totalStudyHours || 0);
-
-        // Calculate commitment duration in hours
-        let durationHours = 0;
-        if (formData.isAllDay) {
-          durationHours = Math.min(dailyCapacity, 6); // Cap all-day at 6 hours
-        } else if (formData.useDaySpecificTiming) {
-          const dayTiming = formData.daySpecificTimings?.find(t => t.dayOfWeek === parseInt(date.split('-')[0])); // This is simplified - in real usage you'd get proper day of week
-          if (dayTiming && dayTiming.startTime && dayTiming.endTime) {
-            const [sh, sm] = dayTiming.startTime.split(':').map(Number);
-            const [eh, em] = dayTiming.endTime.split(':').map(Number);
-            durationHours = Math.max(0, ((eh * 60 + em) - (sh * 60 + sm)) / 60);
-          }
-        } else if (formData.startTime && formData.endTime) {
-          const [sh, sm] = formData.startTime.split(':').map(Number);
-          const [eh, em] = formData.endTime.split(':').map(Number);
-          durationHours = Math.max(0, ((eh * 60 + em) - (sh * 60 + sm)) / 60);
-        }
-
-        if ((remaining - durationHours) < 0) {
-          setConflictError(
-            `Adding this commitment will exceed your daily study capacity on ${new Date(date).toLocaleDateString()} (${durationHours.toFixed(1)}h needed, ${remaining.toFixed(1)}h available).`
-          );
-          return;
-        }
-
-        if ((remaining - durationHours) < threshold) {
-          setConflictError(
-            `Warning: This commitment will nearly fill your daily study capacity on ${new Date(date).toLocaleDateString()} (only ${(remaining - durationHours).toFixed(1)}h will remain).`
-          );
-          return;
-        }
-      }
-    }
 
     const commitmentData = {
       ...formData,
@@ -931,17 +875,7 @@ const FixedCommitmentInput: React.FC<FixedCommitmentInputProps> = ({
                     </p>
                     <p className="text-xs text-blue-600 dark:text-blue-400">
                       Daily available hours: {settings.dailyAvailableHours}h
-                      {formData.countsTowardDailyHours && formData.startTime && formData.endTime && (
-                        <span className="ml-1">
-                          (This commitment will use {
-                            Math.abs(
-                              (parseInt(formData.endTime.split(':')[0]) + parseInt(formData.endTime.split(':')[1])/60) -
-                              (parseInt(formData.startTime.split(':')[0]) + parseInt(formData.startTime.split(':')[1])/60)
-                            ).toFixed(1)
-                          }h)
-                        </span>
-                      )}
-                    </p>
+                                          </p>
                   </div>
                 )}
               </div>
@@ -1107,25 +1041,6 @@ const FixedCommitmentInput: React.FC<FixedCommitmentInputProps> = ({
             />
           </div>
 
-          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-lg p-4">
-            <label className="flex items-start space-x-3">
-              <input
-                type="checkbox"
-                checked={formData.countsTowardDailyHours}
-                onChange={(e) => setFormData({ ...formData, countsTowardDailyHours: e.target.checked })}
-                className="mt-1 text-blue-600 focus:ring-blue-500 rounded"
-              />
-              <div>
-                <span className="block text-sm font-medium text-gray-700 dark:text-gray-200">
-                  Count toward daily available hours
-                </span>
-                <span className="block text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  Check this for work/productive commitments that use your daily capacity (e.g., meetings, study sessions).
-                  Leave unchecked for personal activities (e.g., meals, commute, exercise).
-                </span>
-              </div>
-            </label>
-          </div>
 
           {/* Conflict Error Display */}
           {conflictError && (
