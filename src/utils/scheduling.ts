@@ -4292,5 +4292,6 @@ export const generateNewStudyPlanPreservingFixedOnly = (
   const preservedFixedOnly = preserveManualSchedules(result.plans, existingStudyPlans, { preserveManualReschedules: false });
   const balancedPlans = rebalanceAroundOneSittingTasks(preservedFixedOnly, tasks, settings, fixedCommitments);
   const smoothedPlans = applyWorkloadSmoothing(balancedPlans, tasks, settings, fixedCommitments);
-  return { plans: smoothedPlans, suggestions: result.suggestions };
+  const finalPlans = preserveFixedSessionsPostProcessing(smoothedPlans, existingStudyPlans);
+  return { plans: finalPlans, suggestions: result.suggestions };
 };
