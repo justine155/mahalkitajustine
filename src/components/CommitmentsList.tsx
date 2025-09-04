@@ -234,14 +234,6 @@ const CommitmentsList: React.FC<CommitmentsListProps> = ({
                       >
                         {commitment.category}
                       </span>
-                      {commitment.countsTowardDailyHours && (
-                        <span
-                          className="px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300"
-                          title="Counts toward daily available hours"
-                        >
-                          📊 Work Time
-                        </span>
-                      )}
                     </div>
                   </div>
                   <div className="space-y-2">
