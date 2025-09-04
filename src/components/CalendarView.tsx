@@ -598,7 +598,14 @@ const CalendarView: React.FC<CalendarViewProps> = ({
   };
 
   // Utility function to find available time slots with precise placement
-  const findNearestAvailableSlot = (targetStart: Date, sessionDuration: number, targetDate: string, excludeSession?: any): { start: Date; end: Date } | null => {
+  const findNearestAvailableSlot = (
+    targetStart: Date,
+    sessionDuration: number,
+    targetDate: string,
+    excludeSession?: any,
+    extraBusy?: Array<{ start: Date; end: Date }>,
+    ignoreCommitmentOnDate?: { id: string; date: string }
+  ): { start: Date; end: Date } | null => {
     if (!settings) return null;
 
     // Get all busy slots for the target date
@@ -624,19 +631,29 @@ const CalendarView: React.FC<CalendarViewProps> = ({
       }
     });
 
-    // Add fixed commitments
+    // Add fixed commitments (optionally ignore one commitment on this date)
     fixedCommitments.forEach(commitment => {
-      if (doesCommitmentApplyToDate(commitment, targetDate) && commitment.startTime && commitment.endTime) {
+      if (
+        doesCommitmentApplyToDate(commitment, targetDate) &&
+        commitment.startTime &&
+        commitment.endTime &&
+        !(ignoreCommitmentOnDate && commitment.id === ignoreCommitmentOnDate.id && targetDate === ignoreCommitmentOnDate.date)
+      ) {
         const commitmentStart = moment(targetDate + ' ' + commitment.startTime).toDate();
         const commitmentEnd = moment(targetDate + ' ' + commitment.endTime).toDate();
         busySlots.push({ start: commitmentStart, end: commitmentEnd });
       }
     });
 
+    // Include any extra busy slots passed in (e.g., newly placed commitment)
+    if (extraBusy && extraBusy.length) {
+      busySlots.push(...extraBusy);
+    }
+
     // Sort busy slots by start time
     busySlots.sort((a, b) => a.start.getTime() - b.start.getTime());
 
-    // Set study window boundaries
+    // Set study window boundaries (study sessions must remain within study window)
     const dayStart = moment(targetDate).hour(settings.studyWindowStartHour || 6).minute(0).second(0).toDate();
     const dayEnd = moment(targetDate).hour(settings.studyWindowEndHour || 23).minute(0).second(0).toDate();
 
@@ -660,7 +677,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({
       return true;
     };
 
-    // IMPROVED: Try to place at exact target time first, then snap if needed
+    // Try exact target time first, then snap if needed
     const SNAP_INTERVAL = timeInterval * 60 * 1000; // Convert user's time interval to milliseconds
 
     // First, try the exact drop position without snapping
@@ -679,7 +696,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({
 
     // If exact location doesn't work, search for nearest alternative
     // Search in time interval increments for consistent grid placement
-    const maxSearchTime = 6 * 60 * 60 * 1000; // Search within 6 hours (reduced from 12)
+    const maxSearchTime = 6 * 60 * 60 * 1000; // Search within 6 hours
 
     for (let offset = SNAP_INTERVAL; offset <= maxSearchTime; offset += SNAP_INTERVAL) {
       // Try both directions from target time, but prioritize forward direction first
