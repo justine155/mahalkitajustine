@@ -4227,8 +4227,11 @@ export const generateNewStudyPlanWithPreservation = (
   // Apply final workload smoothing to minimize daily variation
   const smoothedPlans = applyWorkloadSmoothing(balancedPlans, tasks, settings, fixedCommitments);
 
+  // FINAL SAFETY PASS: ensure all previously completed/skipped sessions are preserved exactly as-is
+  const finalPlans = preserveFixedSessionsPostProcessing(smoothedPlans, existingStudyPlans);
+
   return {
-    plans: smoothedPlans,
+    plans: finalPlans,
     suggestions: result.suggestions
   };
 };
