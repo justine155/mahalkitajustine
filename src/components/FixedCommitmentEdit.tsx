@@ -111,7 +111,6 @@ const FixedCommitmentEdit: React.FC<FixedCommitmentEditProps> = ({ commitment, e
         isAllDay: formData.isAllDay,
         useDaySpecificTiming: formData.useDaySpecificTiming,
         daySpecificTimings: formData.daySpecificTimings,
-        countsTowardDailyHours: formData.countsTowardDailyHours,
         // Preserve existing modified occurrences and deleted occurrences
         modifiedOccurrences: commitment.modifiedOccurrences,
         deletedOccurrences: commitment.deletedOccurrences
@@ -608,25 +607,6 @@ const FixedCommitmentEdit: React.FC<FixedCommitmentEditProps> = ({ commitment, e
           />
         </div>
 
-        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-lg p-4">
-          <label className="flex items-start space-x-3">
-            <input
-              type="checkbox"
-              checked={formData.countsTowardDailyHours}
-              onChange={(e) => setFormData({ ...formData, countsTowardDailyHours: e.target.checked })}
-              className="mt-1 text-blue-600 focus:ring-blue-500 rounded"
-            />
-            <div>
-              <span className="block text-sm font-medium text-gray-700 dark:text-gray-200">
-                Count toward daily available hours
-              </span>
-              <span className="block text-xs text-gray-500 dark:text-gray-400 mt-1">
-                Check this for work/productive commitments that use your daily capacity (e.g., meetings, study sessions).
-                Leave unchecked for personal activities (e.g., meals, commute, exercise).
-              </span>
-            </div>
-          </label>
-        </div>
 
         {/* Conflict Error Display */}
         {conflictError && (
