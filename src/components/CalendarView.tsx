@@ -598,7 +598,14 @@ const CalendarView: React.FC<CalendarViewProps> = ({
   };
 
   // Utility function to find available time slots with precise placement
-  const findNearestAvailableSlot = (targetStart: Date, sessionDuration: number, targetDate: string, excludeSession?: any): { start: Date; end: Date } | null => {
+  const findNearestAvailableSlot = (
+    targetStart: Date,
+    sessionDuration: number,
+    targetDate: string,
+    excludeSession?: any,
+    extraBusy?: Array<{ start: Date; end: Date }>,
+    ignoreCommitmentOnDate?: { id: string; date: string }
+  ): { start: Date; end: Date } | null => {
     if (!settings) return null;
 
     // Get all busy slots for the target date
@@ -624,19 +631,29 @@ const CalendarView: React.FC<CalendarViewProps> = ({
       }
     });
 
-    // Add fixed commitments
+    // Add fixed commitments (optionally ignore one commitment on this date)
     fixedCommitments.forEach(commitment => {
-      if (doesCommitmentApplyToDate(commitment, targetDate) && commitment.startTime && commitment.endTime) {
+      if (
+        doesCommitmentApplyToDate(commitment, targetDate) &&
+        commitment.startTime &&
+        commitment.endTime &&
+        !(ignoreCommitmentOnDate && commitment.id === ignoreCommitmentOnDate.id && targetDate === ignoreCommitmentOnDate.date)
+      ) {
         const commitmentStart = moment(targetDate + ' ' + commitment.startTime).toDate();
         const commitmentEnd = moment(targetDate + ' ' + commitment.endTime).toDate();
         busySlots.push({ start: commitmentStart, end: commitmentEnd });
       }
     });
 
+    // Include any extra busy slots passed in (e.g., newly placed commitment)
+    if (extraBusy && extraBusy.length) {
+      busySlots.push(...extraBusy);
+    }
+
     // Sort busy slots by start time
     busySlots.sort((a, b) => a.start.getTime() - b.start.getTime());
 
-    // Set study window boundaries
+    // Set study window boundaries (study sessions must remain within study window)
     const dayStart = moment(targetDate).hour(settings.studyWindowStartHour || 6).minute(0).second(0).toDate();
     const dayEnd = moment(targetDate).hour(settings.studyWindowEndHour || 23).minute(0).second(0).toDate();
 
@@ -660,7 +677,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({
       return true;
     };
 
-    // IMPROVED: Try to place at exact target time first, then snap if needed
+    // Try exact target time first, then snap if needed
     const SNAP_INTERVAL = timeInterval * 60 * 1000; // Convert user's time interval to milliseconds
 
     // First, try the exact drop position without snapping
@@ -679,7 +696,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({
 
     // If exact location doesn't work, search for nearest alternative
     // Search in time interval increments for consistent grid placement
-    const maxSearchTime = 6 * 60 * 60 * 1000; // Search within 6 hours (reduced from 12)
+    const maxSearchTime = 6 * 60 * 60 * 1000; // Search within 6 hours
 
     for (let offset = SNAP_INTERVAL; offset <= maxSearchTime; offset += SNAP_INTERVAL) {
       // Try both directions from target time, but prioritize forward direction first
@@ -720,19 +737,8 @@ const CalendarView: React.FC<CalendarViewProps> = ({
 
     const bufferTimeMs = (settings.bufferTimeBetweenSessions || 0) * 60 * 1000;
 
-    // Gather busy slots on target date (study sessions + other commitments except the moving instance)
+    // Gather busy slots on target date (only other commitments; allow overlap with study sessions)
     const busy: Array<{ start: Date; end: Date }> = [];
-
-    // Study sessions
-    studyPlans.forEach(plan => {
-      if (plan.date !== targetDate) return;
-      plan.plannedTasks.forEach(session => {
-        if (session.status === 'skipped' || !session.startTime || !session.endTime) return;
-        const s = moment(`${targetDate} ${session.startTime}`).toDate();
-        const e = moment(`${targetDate} ${session.endTime}`).toDate();
-        busy.push({ start: s, end: e });
-      });
-    });
 
     // Commitments
     fixedCommitments.forEach(c => {
@@ -745,9 +751,9 @@ const CalendarView: React.FC<CalendarViewProps> = ({
       const isAllDay = mod?.isAllDay ?? c.isAllDay;
       if (isAllDay) {
         // Block entire day
-        const dayStart = moment(`${targetDate} 00:00`).toDate();
-        const dayEnd = moment(`${targetDate} 23:59`).toDate();
-        busy.push({ start: dayStart, end: dayEnd });
+        const dayStartFull = moment(`${targetDate} 00:00`).toDate();
+        const dayEndFull = moment(`${targetDate} 23:59`).toDate();
+        busy.push({ start: dayStartFull, end: dayEndFull });
         return;
       }
       let startStr: string | undefined;
@@ -775,11 +781,9 @@ const CalendarView: React.FC<CalendarViewProps> = ({
 
     busy.sort((a, b) => a.start.getTime() - b.start.getTime());
 
-    // Boundaries using effective study window
-    const startHour = settings.studyWindowStartHour || 6;
-    const endHour = settings.studyWindowEndHour || 23;
-    const dayStart = moment(targetDate).hour(startHour).minute(0).second(0).toDate();
-    const dayEnd = moment(targetDate).hour(endHour).minute(0).second(0).toDate();
+    // Boundaries: full day (commitments can be outside study window)
+    const dayStart = moment(targetDate).hour(0).minute(0).second(0).toDate();
+    const dayEnd = moment(targetDate).hour(23).minute(59).second(59).toDate();
 
     const durMs = durationHours * 60 * 60 * 1000;
 
@@ -2089,6 +2093,64 @@ const CalendarView: React.FC<CalendarViewProps> = ({
                   className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
                   onClick={() => {
                     const { commitment, targetDate, newStartTime, newEndTime } = pendingCommitmentMove;
+
+                    // Move overlapping study sessions on this date to nearest available slots
+                    const newStart = moment(`${targetDate} ${newStartTime}`).toDate();
+                    const newEnd = moment(`${targetDate} ${newEndTime}`).toDate();
+
+                    let updatedPlans = [...studyPlans];
+                    const planIndex = updatedPlans.findIndex(p => p.date === targetDate);
+                    if (planIndex >= 0 && settings && onUpdateStudyPlans) {
+                      const plan = updatedPlans[planIndex];
+                      const tasksCopy = [...plan.plannedTasks];
+
+                      const overlaps = tasksCopy
+                        .map((s, idx) => ({ s, idx }))
+                        .filter(({ s }) => s.status !== 'skipped' && s.startTime && s.endTime)
+                        .filter(({ s }) => {
+                          const sStart = moment(`${targetDate} ${s.startTime}`).toDate();
+                          const sEnd = moment(`${targetDate} ${s.endTime}`).toDate();
+                          return sStart < newEnd && sEnd > newStart;
+                        });
+
+                      let extraBusy: Array<{ start: Date; end: Date }> = [{ start: newStart, end: newEnd }];
+                      for (const { s, idx } of overlaps) {
+                        const originalStart = moment(`${targetDate} ${s.startTime}`).toDate();
+                        const slot = findNearestAvailableSlot(
+                          originalStart,
+                          s.allocatedHours,
+                          targetDate,
+                          s,
+                          extraBusy,
+                          { id: commitment.id, date: targetDate }
+                        );
+                        if (!slot) {
+                          setDragFeedback('Unable to move one or more sessions to fit the commitment');
+                          return; // Abort without updating commitment
+                        }
+                        // Update session
+                        const updatedSession = {
+                          ...s,
+                          startTime: moment(slot.start).format('HH:mm'),
+                          endTime: moment(slot.end).format('HH:mm'),
+                          originalTime: s.originalTime || s.startTime,
+                          originalDate: s.originalDate || targetDate,
+                          rescheduledAt: new Date().toISOString(),
+                          isManualOverride: true
+                        } as StudySession;
+                        tasksCopy[idx] = updatedSession;
+                        extraBusy.push({ start: slot.start, end: slot.end });
+                      }
+
+                      updatedPlans[planIndex] = { ...plan, plannedTasks: tasksCopy };
+                      onUpdateStudyPlans(updatedPlans);
+                      if (overlaps.length) {
+                        setDragFeedback(`Moved ${overlaps.length} session(s) to accommodate commitment`);
+                        setTimeout(() => setDragFeedback(''), 3000);
+                      }
+                    }
+
+                    // Apply commitment change for only this block
                     const updated = {
                       ...commitment.modifiedOccurrences,
                       [targetDate]: {
@@ -2108,8 +2170,65 @@ const CalendarView: React.FC<CalendarViewProps> = ({
                 <button
                   className="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
                   onClick={() => {
-                    const { commitment, newStartTime, dayOfWeek } = pendingCommitmentMove;
-                    // Update all similar occurrences uniformly
+                    const { commitment, targetDate, newStartTime, newEndTime, dayOfWeek } = pendingCommitmentMove;
+
+                    // First, move overlapping study sessions on the target date
+                    const newStart = moment(`${targetDate} ${newStartTime}`).toDate();
+                    const newEnd = moment(`${targetDate} ${newEndTime}`).toDate();
+
+                    let updatedPlans = [...studyPlans];
+                    const planIndex = updatedPlans.findIndex(p => p.date === targetDate);
+                    if (planIndex >= 0 && settings && onUpdateStudyPlans) {
+                      const plan = updatedPlans[planIndex];
+                      const tasksCopy = [...plan.plannedTasks];
+
+                      const overlaps = tasksCopy
+                        .map((s, idx) => ({ s, idx }))
+                        .filter(({ s }) => s.status !== 'skipped' && s.startTime && s.endTime)
+                        .filter(({ s }) => {
+                          const sStart = moment(`${targetDate} ${s.startTime}`).toDate();
+                          const sEnd = moment(`${targetDate} ${s.endTime}`).toDate();
+                          return sStart < newEnd && sEnd > newStart;
+                        });
+
+                      let extraBusy: Array<{ start: Date; end: Date }> = [{ start: newStart, end: newEnd }];
+                      for (const { s, idx } of overlaps) {
+                        const originalStart = moment(`${targetDate} ${s.startTime}`).toDate();
+                        const slot = findNearestAvailableSlot(
+                          originalStart,
+                          s.allocatedHours,
+                          targetDate,
+                          s,
+                          extraBusy,
+                          { id: commitment.id, date: targetDate }
+                        );
+                        if (!slot) {
+                          setDragFeedback('Unable to move one or more sessions to fit the commitment');
+                          return; // Abort without updating commitment
+                        }
+                        // Update session
+                        const updatedSession = {
+                          ...s,
+                          startTime: moment(slot.start).format('HH:mm'),
+                          endTime: moment(slot.end).format('HH:mm'),
+                          originalTime: s.originalTime || s.startTime,
+                          originalDate: s.originalDate || targetDate,
+                          rescheduledAt: new Date().toISOString(),
+                          isManualOverride: true
+                        } as StudySession;
+                        tasksCopy[idx] = updatedSession;
+                        extraBusy.push({ start: slot.start, end: slot.end });
+                      }
+
+                      updatedPlans[planIndex] = { ...plan, plannedTasks: tasksCopy };
+                      onUpdateStudyPlans(updatedPlans);
+                      if (overlaps.length) {
+                        setDragFeedback(`Moved ${overlaps.length} session(s) to accommodate commitment`);
+                        setTimeout(() => setDragFeedback(''), 3000);
+                      }
+                    }
+
+                    // Then, update commitment timing for all similar occurrences
                     if (commitment.recurring) {
                       if (commitment.useDaySpecificTiming && commitment.daySpecificTimings) {
                         const current = commitment.daySpecificTimings.find(t => t.dayOfWeek === dayOfWeek);
