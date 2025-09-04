@@ -1503,33 +1503,7 @@ function App() {
         };
         setCompletedCommitments(prev => [...prev, completedRecord]);
 
-        // Mark the commitment as completed for this date using cancellation logic
-        // This ensures it gets removed from the study plan and calendar
-        if (commitment.recurring) {
-            // For recurring commitments, add this date to deletedOccurrences
-            setFixedCommitments(prevCommitments =>
-                prevCommitments.map(c =>
-                    c.id === commitment.id
-                        ? {
-                            ...c,
-                            deletedOccurrences: [...(c.deletedOccurrences || []), completedDate]
-                        }
-                        : c
-                )
-            );
-        } else {
-            // For one-time commitments, remove the specific date from specificDates
-            setFixedCommitments(prevCommitments =>
-                prevCommitments.map(c =>
-                    c.id === commitment.id
-                        ? {
-                            ...c,
-                            specificDates: c.specificDates?.filter(d => d !== completedDate) || []
-                        }
-                        : c
-                )
-            );
-        }
+        // Do not modify the commitment itself on timer completion
 
         // Clear the commitment timer state
         setCurrentCommitment(null);
@@ -1582,10 +1556,7 @@ function App() {
     };
 
     const handleSelectCommitment = (commitment: FixedCommitment, duration: number) => {
-        // Only allow timer for commitments that count toward daily hours
-        if (!commitment.countsTowardDailyHours) return;
-
-        // First, ensure any running timer is stopped to prevent race conditions
+        // Stop any running timer to prevent race conditions
         setGlobalTimer(prev => ({
             ...prev,
             isRunning: false,
