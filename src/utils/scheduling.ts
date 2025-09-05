@@ -4246,10 +4246,11 @@ export const generateNewStudyPlanPreservingFixedOnly = (
   fixedCommitments: FixedCommitment[],
   existingStudyPlans: StudyPlan[] = []
 ): { plans: StudyPlan[]; suggestions: Array<{ taskTitle: string; unscheduledMinutes: number }> } => {
-  const result = generateNewStudyPlan(tasks, settings, fixedCommitments, existingStudyPlans);
-  const preservedFixedOnly = preserveManualSchedules(result.plans, existingStudyPlans, { preserveManualReschedules: false });
+  const existingWithFixed = markPastSessionsAsSkipped(existingStudyPlans);
+  const result = generateNewStudyPlan(tasks, settings, fixedCommitments, existingWithFixed);
+  const preservedFixedOnly = preserveManualSchedules(result.plans, existingWithFixed, { preserveManualReschedules: false });
   const balancedPlans = rebalanceAroundOneSittingTasks(preservedFixedOnly, tasks, settings, fixedCommitments);
   const smoothedPlans = applyWorkloadSmoothing(balancedPlans, tasks, settings, fixedCommitments);
-  const finalPlans = preserveFixedSessionsPostProcessing(smoothedPlans, existingStudyPlans);
+  const finalPlans = preserveFixedSessionsPostProcessing(smoothedPlans, existingWithFixed);
   return { plans: finalPlans, suggestions: result.suggestions };
 };
