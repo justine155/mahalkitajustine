@@ -107,6 +107,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({
   onDeleteFixedCommitment,
   onUpdateCommitment,
   onUpdateStudyPlans,
+  onRefreshStudyPlan,
 }) => {
   const [timeInterval, setTimeInterval] = useState(() => {
     const saved = localStorage.getItem('timepilot-calendar-interval');
@@ -1184,7 +1185,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({
         } else if (categoryLower.includes('home') || categoryLower.includes('house') || categoryLower.includes('family')) {
           return '🏠';
         } else if (categoryLower.includes('personal') || categoryLower.includes('life')) {
-          return '����';
+          return '��';
         } else {
           return '📋'; // Default for unknown categories
         }
