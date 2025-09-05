@@ -2105,11 +2105,11 @@ const CalendarView: React.FC<CalendarViewProps> = ({
                 <button
                   className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
                   onClick={() => {
-                    const { commitment, targetDate, newStartTime, newEndTime } = pendingCommitmentMove;
+                    const { commitment, targetDate, newStartTime, newEndTime, isAllDay } = pendingCommitmentMove;
 
                     // Move overlapping study sessions on this date to nearest available slots
-                    const newStart = moment(`${targetDate} ${newStartTime}`).toDate();
-                    const newEnd = moment(`${targetDate} ${newEndTime}`).toDate();
+                    const newStart = isAllDay ? moment(`${targetDate} 00:00`).toDate() : moment(`${targetDate} ${newStartTime}`).toDate();
+                    const newEnd = isAllDay ? moment(`${targetDate} 23:59`).toDate() : moment(`${targetDate} ${newEndTime}`).toDate();
 
                     let updatedPlans = [...studyPlans];
                     const planIndex = updatedPlans.findIndex(p => p.date === targetDate);
@@ -2171,11 +2171,12 @@ const CalendarView: React.FC<CalendarViewProps> = ({
                         endTime: newEndTime,
                         title: commitment.title,
                         category: commitment.category,
-                        isAllDay: false,
+                        isAllDay: !!isAllDay,
                       }
                     } as NonNullable<FixedCommitment['modifiedOccurrences']>;
                     onUpdateCommitment && onUpdateCommitment(commitment.id, { modifiedOccurrences: updated });
                     setPendingCommitmentMove(null);
+                    if (onRefreshStudyPlan) onRefreshStudyPlan(false);
                   }}
                 >
                   Only this block
@@ -2183,11 +2184,11 @@ const CalendarView: React.FC<CalendarViewProps> = ({
                 <button
                   className="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
                   onClick={() => {
-                    const { commitment, targetDate, newStartTime, newEndTime, dayOfWeek } = pendingCommitmentMove;
+                    const { commitment, targetDate, newStartTime, newEndTime, dayOfWeek, isAllDay } = pendingCommitmentMove;
 
                     // First, move overlapping study sessions on the target date
-                    const newStart = moment(`${targetDate} ${newStartTime}`).toDate();
-                    const newEnd = moment(`${targetDate} ${newEndTime}`).toDate();
+                    const newStart = isAllDay ? moment(`${targetDate} 00:00`).toDate() : moment(`${targetDate} ${newStartTime}`).toDate();
+                    const newEnd = isAllDay ? moment(`${targetDate} 23:59`).toDate() : moment(`${targetDate} ${newEndTime}`).toDate();
 
                     let updatedPlans = [...studyPlans];
                     const planIndex = updatedPlans.findIndex(p => p.date === targetDate);
@@ -2244,33 +2245,51 @@ const CalendarView: React.FC<CalendarViewProps> = ({
                     // Then, update commitment timing for all similar occurrences
                     if (commitment.recurring) {
                       if (commitment.useDaySpecificTiming && commitment.daySpecificTimings) {
-                        const current = commitment.daySpecificTimings.find(t => t.dayOfWeek === dayOfWeek);
-                        const curDur = current && !current.isAllDay && current.startTime && current.endTime
-                          ? toMinutes(current.endTime) - toMinutes(current.startTime)
-                          : (commitment.startTime && commitment.endTime ? toMinutes(commitment.endTime) - toMinutes(commitment.startTime) : pendingCommitmentMove.durationMinutes);
-                        const nextEnd = minutesToTime(toMinutes(newStartTime) + curDur);
-                        const updatedTimings = commitment.daySpecificTimings.map(t => t.dayOfWeek === dayOfWeek
-                          ? { ...t, isAllDay: false, startTime: newStartTime, endTime: nextEnd }
-                          : t
-                        );
-                        // Clear modified occurrences for this weekday to enforce uniform times
-                        const cleanedMods = Object.fromEntries(
-                          Object.entries(commitment.modifiedOccurrences || {}).filter(([date]) => new Date(date).getDay() !== dayOfWeek)
-                        );
-                        onUpdateCommitment && onUpdateCommitment(commitment.id, { daySpecificTimings: updatedTimings, modifiedOccurrences: cleanedMods });
+                        if (isAllDay) {
+                          const updatedTimings = commitment.daySpecificTimings.map(t => t.dayOfWeek === dayOfWeek
+                            ? { ...t, isAllDay: true }
+                            : t
+                          );
+                          const cleanedMods = Object.fromEntries(
+                            Object.entries(commitment.modifiedOccurrences || {}).filter(([date]) => new Date(date).getDay() !== dayOfWeek)
+                          );
+                          onUpdateCommitment && onUpdateCommitment(commitment.id, { daySpecificTimings: updatedTimings, modifiedOccurrences: cleanedMods });
+                        } else {
+                          const current = commitment.daySpecificTimings.find(t => t.dayOfWeek === dayOfWeek);
+                          const curDur = current && !current.isAllDay && current.startTime && current.endTime
+                            ? toMinutes(current.endTime) - toMinutes(current.startTime)
+                            : (commitment.startTime && commitment.endTime ? toMinutes(commitment.endTime) - toMinutes(commitment.startTime) : pendingCommitmentMove.durationMinutes);
+                          const nextEnd = minutesToTime(toMinutes(newStartTime) + curDur);
+                          const updatedTimings = commitment.daySpecificTimings.map(t => t.dayOfWeek === dayOfWeek
+                            ? { ...t, isAllDay: false, startTime: newStartTime, endTime: nextEnd }
+                            : t
+                          );
+                          const cleanedMods = Object.fromEntries(
+                            Object.entries(commitment.modifiedOccurrences || {}).filter(([date]) => new Date(date).getDay() !== dayOfWeek)
+                          );
+                          onUpdateCommitment && onUpdateCommitment(commitment.id, { daySpecificTimings: updatedTimings, modifiedOccurrences: cleanedMods });
+                        }
                       } else {
-                        const baseDur = commitment.startTime && commitment.endTime ? toMinutes(commitment.endTime) - toMinutes(commitment.startTime) : pendingCommitmentMove.durationMinutes;
-                        const nextEnd = minutesToTime(toMinutes(newStartTime) + baseDur);
-                        // Update base times and clear all modified occurrences so all dates align
-                        onUpdateCommitment && onUpdateCommitment(commitment.id, { startTime: newStartTime, endTime: nextEnd, modifiedOccurrences: {} });
+                        if (isAllDay) {
+                          onUpdateCommitment && onUpdateCommitment(commitment.id, { isAllDay: true, modifiedOccurrences: {} });
+                        } else {
+                          const baseDur = commitment.startTime && commitment.endTime ? toMinutes(commitment.endTime) - toMinutes(commitment.startTime) : pendingCommitmentMove.durationMinutes;
+                          const nextEnd = minutesToTime(toMinutes(newStartTime) + baseDur);
+                          onUpdateCommitment && onUpdateCommitment(commitment.id, { startTime: newStartTime, endTime: nextEnd, modifiedOccurrences: {} });
+                        }
                       }
                     } else {
                       // Non-recurring with multiple dates: set base time for all and clear overrides
-                      const baseDur = commitment.startTime && commitment.endTime ? toMinutes(commitment.endTime) - toMinutes(commitment.startTime) : pendingCommitmentMove.durationMinutes;
-                      const nextEnd = minutesToTime(toMinutes(newStartTime) + baseDur);
-                      onUpdateCommitment && onUpdateCommitment(commitment.id, { startTime: newStartTime, endTime: nextEnd, modifiedOccurrences: {} });
+                      if (isAllDay) {
+                        onUpdateCommitment && onUpdateCommitment(commitment.id, { isAllDay: true, modifiedOccurrences: {} });
+                      } else {
+                        const baseDur = commitment.startTime && commitment.endTime ? toMinutes(commitment.endTime) - toMinutes(commitment.startTime) : pendingCommitmentMove.durationMinutes;
+                        const nextEnd = minutesToTime(toMinutes(newStartTime) + baseDur);
+                        onUpdateCommitment && onUpdateCommitment(commitment.id, { startTime: newStartTime, endTime: nextEnd, modifiedOccurrences: {} });
+                      }
                     }
                     setPendingCommitmentMove(null);
+                    if (onRefreshStudyPlan) onRefreshStudyPlan(false);
                   }}
                 >
                   All similar
