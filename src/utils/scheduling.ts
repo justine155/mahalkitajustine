@@ -1601,12 +1601,22 @@ export const generateNewStudyPlan = (
     const suggestions: Array<{ taskTitle: string; unscheduledMinutes: number }> = [];
     let taskScheduledHours: { [taskId: string]: number } = {};
     
-    // Include completed and skipped sessions so their durations are preserved and not redistributed
-    for (const plan of studyPlans) {
-      for (const session of plan.plannedTasks) {
-        taskScheduledHours[session.taskId] = (taskScheduledHours[session.taskId] || 0) + session.allocatedHours;
+    // Include newly generated sessions
+  for (const plan of studyPlans) {
+    for (const session of plan.plannedTasks) {
+      taskScheduledHours[session.taskId] = (taskScheduledHours[session.taskId] || 0) + session.allocatedHours;
+    }
+  }
+  // Also include FIXED sessions (done/completed/skipped) from existing plans so they are never counted as unscheduled
+  if (existingStudyPlans && existingStudyPlans.length > 0) {
+    for (const prevPlan of existingStudyPlans) {
+      for (const prevSession of prevPlan.plannedTasks) {
+        if (prevSession.done || prevSession.status === 'completed' || prevSession.status === 'skipped') {
+          taskScheduledHours[prevSession.taskId] = (taskScheduledHours[prevSession.taskId] || 0) + prevSession.allocatedHours;
+        }
       }
     }
+  }
     
     // Global redistribution pass: try to fit any remaining unscheduled hours
     const tasksWithUnscheduledHours = tasksEven.filter(task => {
