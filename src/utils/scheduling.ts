@@ -2433,6 +2433,17 @@ export const generateNewStudyPlan = (
     });
   }
 
+  // Include fixed (completed/skipped/done) sessions from existing plans so they are not counted as unscheduled
+  if (existingStudyPlans && existingStudyPlans.length > 0) {
+    for (const prevPlan of existingStudyPlans) {
+      for (const prevSession of prevPlan.plannedTasks) {
+        if (prevSession.done || prevSession.status === 'completed' || prevSession.status === 'skipped') {
+          taskScheduledHours[prevSession.taskId] = (taskScheduledHours[prevSession.taskId] || 0) + prevSession.allocatedHours;
+        }
+      }
+    }
+  }
+
   // After all days, add suggestions for any unscheduled hours
   const suggestions = getUnscheduledMinutesForTasks(tasksSorted, taskScheduledHours, settings);
   return { plans: studyPlans, suggestions };
