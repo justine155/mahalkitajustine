@@ -26,6 +26,7 @@ interface CalendarViewProps {
   onDeleteFixedCommitment?: (commitmentId: string) => void;
   onUpdateCommitment?: (commitmentId: string, updates: Partial<FixedCommitment>) => void;
   onUpdateStudyPlans?: (updatedPlans: StudyPlan[]) => void;
+  onRefreshStudyPlan?: (preserveManualReschedules: boolean) => void;
 }
 
 interface CalendarEvent {
@@ -1183,7 +1184,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({
         } else if (categoryLower.includes('home') || categoryLower.includes('house') || categoryLower.includes('family')) {
           return '🏠';
         } else if (categoryLower.includes('personal') || categoryLower.includes('life')) {
-          return '��';
+          return '����';
         } else {
           return '📋'; // Default for unknown categories
         }
