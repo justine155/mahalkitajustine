@@ -2853,6 +2853,7 @@ function App() {
                             onDeleteFixedCommitment={handleDeleteCommitment}
                             onUpdateCommitment={handleUpdateFixedCommitment}
                             onUpdateStudyPlans={setStudyPlans}
+                            onRefreshStudyPlan={handleRefreshStudyPlan}
                         />
                     )}
 

@@ -1601,12 +1601,22 @@ export const generateNewStudyPlan = (
     const suggestions: Array<{ taskTitle: string; unscheduledMinutes: number }> = [];
     let taskScheduledHours: { [taskId: string]: number } = {};
     
-    // Include completed and skipped sessions so their durations are preserved and not redistributed
-    for (const plan of studyPlans) {
-      for (const session of plan.plannedTasks) {
-        taskScheduledHours[session.taskId] = (taskScheduledHours[session.taskId] || 0) + session.allocatedHours;
+    // Include newly generated sessions
+  for (const plan of studyPlans) {
+    for (const session of plan.plannedTasks) {
+      taskScheduledHours[session.taskId] = (taskScheduledHours[session.taskId] || 0) + session.allocatedHours;
+    }
+  }
+  // Also include FIXED sessions (done/completed/skipped) from existing plans so they are never counted as unscheduled
+  if (existingStudyPlans && existingStudyPlans.length > 0) {
+    for (const prevPlan of existingStudyPlans) {
+      for (const prevSession of prevPlan.plannedTasks) {
+        if (prevSession.done || prevSession.status === 'completed' || prevSession.status === 'skipped') {
+          taskScheduledHours[prevSession.taskId] = (taskScheduledHours[prevSession.taskId] || 0) + prevSession.allocatedHours;
+        }
       }
     }
+  }
     
     // Global redistribution pass: try to fit any remaining unscheduled hours
     const tasksWithUnscheduledHours = tasksEven.filter(task => {
@@ -2421,6 +2431,17 @@ export const generateNewStudyPlan = (
       // Add to task scheduled hours tracking
       taskScheduledHours[task.id] = (taskScheduledHours[task.id] || 0) + (task.estimatedHours - remainingHours);
     });
+  }
+
+  // Include fixed (completed/skipped/done) sessions from existing plans so they are not counted as unscheduled
+  if (existingStudyPlans && existingStudyPlans.length > 0) {
+    for (const prevPlan of existingStudyPlans) {
+      for (const prevSession of prevPlan.plannedTasks) {
+        if (prevSession.done || prevSession.status === 'completed' || prevSession.status === 'skipped') {
+          taskScheduledHours[prevSession.taskId] = (taskScheduledHours[prevSession.taskId] || 0) + prevSession.allocatedHours;
+        }
+      }
+    }
   }
 
   // After all days, add suggestions for any unscheduled hours
@@ -3685,22 +3706,39 @@ const preserveFixedSessionsPostProcessing = (
   existingPlans: StudyPlan[]
 ): StudyPlan[] => {
   const result = newPlans.map(p => ({ ...p, plannedTasks: [...p.plannedTasks] }));
+  const today = getLocalDateString();
 
   existingPlans.forEach(prevPlan => {
-    const targetPlan = result.find(p => p.date === prevPlan.date);
-    if (!targetPlan) return;
+    let targetPlan = result.find(p => p.date === prevPlan.date);
+
+    // If the day doesn't exist in the new plans but the previous plan contains fixed sessions,
+    // re-introduce that day with only the fixed sessions to preserve history/audit trail.
+    if (!targetPlan) {
+      const fixedSessions = prevPlan.plannedTasks.filter(s => s.done || s.status === 'completed' || s.status === 'skipped');
+      if (fixedSessions.length > 0) {
+        result.push({
+          id: prevPlan.id,
+          date: prevPlan.date,
+          plannedTasks: fixedSessions.map(s => ({ ...s })),
+          totalStudyHours: calculateTotalStudyHours(fixedSessions),
+          availableHours: prevPlan.availableHours,
+          isOverloaded: prevPlan.isOverloaded,
+        });
+      }
+      return; // Nothing more to do for days that weren't regenerated
+    }
 
     prevPlan.plannedTasks.forEach(prevSession => {
       const isFixed = prevSession.done || prevSession.status === 'completed' || prevSession.status === 'skipped';
       if (!isFixed) return;
 
-      const idx = targetPlan.plannedTasks.findIndex(s => s.taskId === prevSession.taskId && s.sessionNumber === prevSession.sessionNumber);
+      const idx = targetPlan!.plannedTasks.findIndex(s => s.taskId === prevSession.taskId && s.sessionNumber === prevSession.sessionNumber);
       if (idx === -1) {
-        targetPlan.plannedTasks.push({ ...prevSession });
-        targetPlan.totalStudyHours = Math.round((targetPlan.totalStudyHours + prevSession.allocatedHours) * 60) / 60;
+        targetPlan!.plannedTasks.push({ ...prevSession });
+        targetPlan!.totalStudyHours = Math.round((targetPlan!.totalStudyHours + prevSession.allocatedHours) * 60) / 60;
       } else {
-        const session = targetPlan.plannedTasks[idx];
-        targetPlan.plannedTasks[idx] = {
+        const session = targetPlan!.plannedTasks[idx];
+        targetPlan!.plannedTasks[idx] = {
           ...session,
           status: prevSession.status,
           done: prevSession.done,
@@ -3718,6 +3756,9 @@ const preserveFixedSessionsPostProcessing = (
       }
     });
   });
+
+  // Sort plans by date to keep chronological order
+  result.sort((a, b) => a.date.localeCompare(b.date));
 
   return result;
 };
@@ -4177,10 +4218,11 @@ export const generateNewStudyPlanWithPreservation = (
   existingStudyPlans: StudyPlan[] = []
 ): { plans: StudyPlan[]; suggestions: Array<{ taskTitle: string; unscheduledMinutes: number }> } => {
   // First, generate the new study plan
-  const result = generateNewStudyPlan(tasks, settings, fixedCommitments, existingStudyPlans);
+  const existingWithFixed = markPastSessionsAsSkipped(existingStudyPlans);
+  const result = generateNewStudyPlan(tasks, settings, fixedCommitments, existingWithFixed);
 
   // Apply manual schedule preservation (includes fixed sessions)
-  const preservedPlans = preserveManualSchedules(result.plans, existingStudyPlans, { preserveManualReschedules: true });
+  const preservedPlans = preserveManualSchedules(result.plans, existingWithFixed, { preserveManualReschedules: true });
 
   // Apply intelligent workload balancing around one-sitting tasks
   const balancedPlans = rebalanceAroundOneSittingTasks(preservedPlans, tasks, settings, fixedCommitments);
@@ -4204,10 +4246,11 @@ export const generateNewStudyPlanPreservingFixedOnly = (
   fixedCommitments: FixedCommitment[],
   existingStudyPlans: StudyPlan[] = []
 ): { plans: StudyPlan[]; suggestions: Array<{ taskTitle: string; unscheduledMinutes: number }> } => {
-  const result = generateNewStudyPlan(tasks, settings, fixedCommitments, existingStudyPlans);
-  const preservedFixedOnly = preserveManualSchedules(result.plans, existingStudyPlans, { preserveManualReschedules: false });
+  const existingWithFixed = markPastSessionsAsSkipped(existingStudyPlans);
+  const result = generateNewStudyPlan(tasks, settings, fixedCommitments, existingWithFixed);
+  const preservedFixedOnly = preserveManualSchedules(result.plans, existingWithFixed, { preserveManualReschedules: false });
   const balancedPlans = rebalanceAroundOneSittingTasks(preservedFixedOnly, tasks, settings, fixedCommitments);
   const smoothedPlans = applyWorkloadSmoothing(balancedPlans, tasks, settings, fixedCommitments);
-  const finalPlans = preserveFixedSessionsPostProcessing(smoothedPlans, existingStudyPlans);
+  const finalPlans = preserveFixedSessionsPostProcessing(smoothedPlans, existingWithFixed);
   return { plans: finalPlans, suggestions: result.suggestions };
 };
