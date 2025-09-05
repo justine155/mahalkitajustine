@@ -3685,22 +3685,39 @@ const preserveFixedSessionsPostProcessing = (
   existingPlans: StudyPlan[]
 ): StudyPlan[] => {
   const result = newPlans.map(p => ({ ...p, plannedTasks: [...p.plannedTasks] }));
+  const today = getLocalDateString();
 
   existingPlans.forEach(prevPlan => {
-    const targetPlan = result.find(p => p.date === prevPlan.date);
-    if (!targetPlan) return;
+    let targetPlan = result.find(p => p.date === prevPlan.date);
+
+    // If the day doesn't exist in the new plans but the previous plan contains fixed sessions,
+    // re-introduce that day with only the fixed sessions to preserve history/audit trail.
+    if (!targetPlan) {
+      const fixedSessions = prevPlan.plannedTasks.filter(s => s.done || s.status === 'completed' || s.status === 'skipped');
+      if (fixedSessions.length > 0) {
+        result.push({
+          id: prevPlan.id,
+          date: prevPlan.date,
+          plannedTasks: fixedSessions.map(s => ({ ...s })),
+          totalStudyHours: calculateTotalStudyHours(fixedSessions),
+          availableHours: prevPlan.availableHours,
+          isOverloaded: prevPlan.isOverloaded,
+        });
+      }
+      return; // Nothing more to do for days that weren't regenerated
+    }
 
     prevPlan.plannedTasks.forEach(prevSession => {
       const isFixed = prevSession.done || prevSession.status === 'completed' || prevSession.status === 'skipped';
       if (!isFixed) return;
 
-      const idx = targetPlan.plannedTasks.findIndex(s => s.taskId === prevSession.taskId && s.sessionNumber === prevSession.sessionNumber);
+      const idx = targetPlan!.plannedTasks.findIndex(s => s.taskId === prevSession.taskId && s.sessionNumber === prevSession.sessionNumber);
       if (idx === -1) {
-        targetPlan.plannedTasks.push({ ...prevSession });
-        targetPlan.totalStudyHours = Math.round((targetPlan.totalStudyHours + prevSession.allocatedHours) * 60) / 60;
+        targetPlan!.plannedTasks.push({ ...prevSession });
+        targetPlan!.totalStudyHours = Math.round((targetPlan!.totalStudyHours + prevSession.allocatedHours) * 60) / 60;
       } else {
-        const session = targetPlan.plannedTasks[idx];
-        targetPlan.plannedTasks[idx] = {
+        const session = targetPlan!.plannedTasks[idx];
+        targetPlan!.plannedTasks[idx] = {
           ...session,
           status: prevSession.status,
           done: prevSession.done,
@@ -3718,6 +3735,9 @@ const preserveFixedSessionsPostProcessing = (
       }
     });
   });
+
+  // Sort plans by date to keep chronological order
+  result.sort((a, b) => a.date.localeCompare(b.date));
 
   return result;
 };
