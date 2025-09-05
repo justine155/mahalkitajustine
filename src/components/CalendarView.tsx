@@ -166,6 +166,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({
     originalDate: string;
     dayOfWeek: number;
     durationMinutes: number;
+    isAllDay?: boolean;
   }>(null);
 
 
@@ -840,11 +841,6 @@ const CalendarView: React.FC<CalendarViewProps> = ({
     if (event.resource.type === 'commitment') {
       const commitment = event.resource.data as FixedCommitment;
 
-      if (commitment.isAllDay) {
-        setDragFeedback('All-day commitments cannot be moved');
-        setTimeout(() => setDragFeedback(''), 3000);
-        return;
-      }
       if (!onUpdateCommitment) {
         setDragFeedback('Commitment updates not available');
         setTimeout(() => setDragFeedback(''), 3000);
@@ -853,6 +849,24 @@ const CalendarView: React.FC<CalendarViewProps> = ({
 
       const targetDate = moment(start).format('YYYY-MM-DD');
       const originalDate = moment(event.start).format('YYYY-MM-DD');
+
+      // Allow moving all-day commitments by date (remain all-day)
+      if (commitment.isAllDay) {
+        setPendingCommitmentMove({
+          commitment,
+          targetDate,
+          newStartTime: '00:00',
+          newEndTime: '23:59',
+          originalDate,
+          dayOfWeek: moment(start).day(),
+          durationMinutes: 24 * 60,
+          isAllDay: true,
+        });
+        setDragFeedback(`📅 All-day moved to ${moment(start).format('ddd, MMM D')}`);
+        setTimeout(() => setDragFeedback(''), 3000);
+        return;
+      }
+
       const durationMinutes = Math.max(5, Math.round(moment(end).diff(moment(start), 'minutes')));
       const durationHours = durationMinutes / 60;
 
@@ -1707,10 +1721,9 @@ const CalendarView: React.FC<CalendarViewProps> = ({
             draggableAccessor={(event: any) => {
               const calendarEvent = event as CalendarEvent;
 
-              // Allow dragging of commitments except all-day ones
+              // Allow dragging of commitments (including all-day)
               if (calendarEvent.resource.type === 'commitment') {
-                const commitment = calendarEvent.resource.data as FixedCommitment;
-                return !commitment.isAllDay;
+                return true;
               }
 
               // Allow dragging of study sessions
