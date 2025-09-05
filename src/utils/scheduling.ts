@@ -4218,10 +4218,11 @@ export const generateNewStudyPlanWithPreservation = (
   existingStudyPlans: StudyPlan[] = []
 ): { plans: StudyPlan[]; suggestions: Array<{ taskTitle: string; unscheduledMinutes: number }> } => {
   // First, generate the new study plan
-  const result = generateNewStudyPlan(tasks, settings, fixedCommitments, existingStudyPlans);
+  const existingWithFixed = markPastSessionsAsSkipped(existingStudyPlans);
+  const result = generateNewStudyPlan(tasks, settings, fixedCommitments, existingWithFixed);
 
   // Apply manual schedule preservation (includes fixed sessions)
-  const preservedPlans = preserveManualSchedules(result.plans, existingStudyPlans, { preserveManualReschedules: true });
+  const preservedPlans = preserveManualSchedules(result.plans, existingWithFixed, { preserveManualReschedules: true });
 
   // Apply intelligent workload balancing around one-sitting tasks
   const balancedPlans = rebalanceAroundOneSittingTasks(preservedPlans, tasks, settings, fixedCommitments);
