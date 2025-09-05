@@ -753,10 +753,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({
       const mod = c.modifiedOccurrences?.[targetDate];
       const isAllDay = mod?.isAllDay ?? c.isAllDay;
       if (isAllDay) {
-        // Block entire day
-        const dayStartFull = moment(`${targetDate} 00:00`).toDate();
-        const dayEndFull = moment(`${targetDate} 23:59`).toDate();
-        busy.push({ start: dayStartFull, end: dayEndFull });
+        // All-day commitments should NOT block the time grid; skip adding busy block
         return;
       }
       let startStr: string | undefined;
@@ -1723,9 +1720,10 @@ const CalendarView: React.FC<CalendarViewProps> = ({
             draggableAccessor={(event: any) => {
               const calendarEvent = event as CalendarEvent;
 
-              // Allow dragging of commitments (including all-day)
+              // Allow dragging of commitments, except all-day ones (non-draggable)
               if (calendarEvent.resource.type === 'commitment') {
-                return true;
+                const c = calendarEvent.resource.data as FixedCommitment;
+                return !c.isAllDay;
               }
 
               // Allow dragging of study sessions
