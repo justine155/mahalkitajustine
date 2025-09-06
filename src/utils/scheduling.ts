@@ -1518,6 +1518,7 @@ export const generateNewStudyPlan = (
 
           if (fallbackResult.scheduled) {
             // Successfully scheduled with fallback approach
+            let fallbackSessionNumber = 1;
             for (const { date, hours } of fallbackResult.scheduledSessions) {
               let dayPlan = studyPlans.find(p => p.date === date)!;
               const roundedHours = Math.round(hours * 60) / 60;
@@ -1545,11 +1546,12 @@ export const generateNewStudyPlan = (
                   startTime: timeSlot.start,
                   endTime: timeSlot.end,
                   allocatedHours: roundedHours,
-                  sessionNumber: fallbackResult.scheduledSessions.indexOf({ date, hours }) + 1,
+                  sessionNumber: fallbackSessionNumber,
                   isFlexible: true,
                   status: 'scheduled'
                 });
 
+                fallbackSessionNumber += 1;
                 dayPlan.totalStudyHours = Math.round((dayPlan.totalStudyHours + roundedHours) * 60) / 60;
                 dailyRemainingHours[date] = Math.round((dailyRemainingHours[date] - roundedHours) * 60) / 60;
               } else {
