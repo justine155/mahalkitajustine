@@ -20,8 +20,53 @@ export const getDaySpecificDailyHours = (date: string, settings: UserSettings): 
 };
 
 // Helper function to calculate committed hours for a specific date that count toward daily hours
-export const calculateCommittedHoursForDate = (_date: string, _commitments: FixedCommitment[]): number => {
-  return 0;
+export const calculateCommittedHoursForDate = (date: string, commitments: FixedCommitment[]): number => {
+  // Sum durations (in hours) of commitments that apply to the date and count toward daily hours
+  // Note: All-day commitments are ignored here for capacity subtraction to avoid over-restricting the day
+  // since daily capacity logic already considers study windows. Modified occurrences and day-specific timings are respected.
+  const toMinutes = (t?: string) => {
+    if (!t) return 0;
+    const [h, m] = t.split(":").map(Number);
+    return (h || 0) * 60 + (m || 0);
+  };
+
+  let totalMinutes = 0;
+
+  const applicable = commitments.filter(c => c.countsTowardDailyHours && doesCommitmentApplyToDate(c, date));
+
+  for (const c of applicable) {
+    // Determine occurrence for this date (consider modified occurrences and day-specific timings)
+    let isAllDay = !!c.isAllDay;
+    let startTime = c.startTime;
+    let endTime = c.endTime;
+
+    const mod = c.modifiedOccurrences?.[date];
+    if (mod) {
+      if (typeof mod.isAllDay === 'boolean') isAllDay = mod.isAllDay;
+      if (mod.startTime) startTime = mod.startTime;
+      if (mod.endTime) endTime = mod.endTime;
+    } else if (c.useDaySpecificTiming && c.daySpecificTimings) {
+      const dow = new Date(date).getDay();
+      const timing = c.daySpecificTimings.find(t => t.dayOfWeek === dow);
+      if (timing) {
+        if (typeof timing.isAllDay === 'boolean') isAllDay = timing.isAllDay;
+        startTime = timing.startTime || startTime;
+        endTime = timing.endTime || endTime;
+      }
+    }
+
+    // Skip all-day for capacity subtraction to avoid wiping the day
+    if (isAllDay) {
+      continue;
+    }
+
+    if (startTime && endTime) {
+      const dur = Math.max(0, toMinutes(endTime) - toMinutes(startTime));
+      totalMinutes += dur;
+    }
+  }
+
+  return Math.round((totalMinutes / 60) * 1000) / 1000; // hours, rounded to 0.001h
 };
 
 // Utility functions
@@ -1371,9 +1416,9 @@ export const generateNewStudyPlan = (
         // Update the plan with combined sessions (keeping skipped sessions separate)
         const skippedSessions = plan.plannedTasks.filter(session => session.status === 'skipped');
         plan.plannedTasks = [...combinedSessions, ...skippedSessions];
-        
-        // Calculate totalStudyHours including skipped sessions as "done"
-        plan.totalStudyHours = calculateTotalStudyHours(plan.plannedTasks);
+
+        // Calculate totalStudyHours based on all planned session durations
+        plan.totalStudyHours = plan.plannedTasks.reduce((sum, s) => sum + s.allocatedHours, 0);
       }
     };
 
@@ -3858,12 +3903,15 @@ const rebalanceAroundOneSittingTasks = (
   settings: UserSettings,
   fixedCommitments: FixedCommitment[]
 ): StudyPlan[] => {
-  // Step 1: Identify days with large one-sitting tasks (>60% of daily capacity)
-  const capacityThreshold = settings.dailyAvailableHours * 0.6;
+  // Step 1: Identify days with large one-sitting tasks using a more permissive threshold
+  // Use day-specific capacity and mark days only when one-sitting occupies >=80% of that day's capacity
   const daysWithLargeOneSittingTasks = new Set<string>();
   const oneSittingTasksByDay = new Map<string, StudySession[]>();
 
   for (const plan of studyPlans) {
+    const dayCapacity = getDaySpecificDailyHours(plan.date, settings);
+    const capacityThreshold = dayCapacity * 0.8; // relax rigidity: only rebalance when truly dominant
+
     const oneSittingSessions = plan.plannedTasks.filter(session => {
       const task = tasks.find(t => t.id === session.taskId);
       return task?.isOneTimeTask && session.allocatedHours >= capacityThreshold;
@@ -3892,7 +3940,18 @@ const rebalanceAroundOneSittingTasks = (
       return plan;
     }
 
-    // Keep one-sitting tasks and manual schedules, extract others for rebalancing
+    // Only rebalance if remaining capacity after keeping all sessions is below a small reserve (e.g., <1h)
+    const dayCapacity = getDaySpecificDailyHours(plan.date, settings);
+
+    // Keep one-sitting tasks and manual schedules, extract others for rebalancing if needed
+    const currentTotal = plan.plannedTasks.reduce((sum, s) => sum + s.allocatedHours, 0);
+    const remainingIfKeepAll = Math.max(0, dayCapacity - currentTotal);
+
+    if (remainingIfKeepAll >= 1) {
+      // Enough room left; don't strip sessions from this day
+      return plan;
+    }
+
     const sessionsToKeep = plan.plannedTasks.filter(session => {
       const task = tasks.find(t => t.id === session.taskId);
 
@@ -3902,7 +3961,7 @@ const rebalanceAroundOneSittingTasks = (
       }
 
       // Keep manually scheduled sessions
-      if (session.manuallyScheduled) {
+      if ((session as any).manuallyScheduled) {
         return true;
       }
 
