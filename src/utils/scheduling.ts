@@ -717,7 +717,7 @@ function validateSessionTimes(
     if (commitment.recurring) {
       // Check day of week match
       const dayOfWeekMatches = commitment.daysOfWeek.includes(new Date(date).getDay());
-      
+
       if (dayOfWeekMatches) {
         // Check date range if specified
         if (commitment.dateRange?.startDate && commitment.dateRange?.endDate) {
@@ -737,10 +737,10 @@ function validateSessionTimes(
     if (appliesToDate && !commitment.deletedOccurrences?.includes(date)) {
       // Check for modified occurrences
       const modified = commitment.modifiedOccurrences?.[date];
-      
+
       // Check if the commitment or its modification is an all-day event
       const isAllDay = modified?.isAllDay !== undefined ? modified.isAllDay : commitment.isAllDay;
-      
+
       // For all-day events, block the entire day
       if (isAllDay) {
         busyIntervals.push({
@@ -752,7 +752,7 @@ function validateSessionTimes(
         // For time-specific events, use the specified times
         const startTime = modified?.startTime || commitment.startTime;
         const endTime = modified?.endTime || commitment.endTime;
-        
+
         if (startTime && endTime) {
           busyIntervals.push({
             start: timeToMinutes(startTime),
@@ -780,7 +780,7 @@ function validateSessionTimes(
   for (let i = 0; i < busyIntervals.length - 1; i++) {
     const current = busyIntervals[i];
     const next = busyIntervals[i + 1];
-    
+
     if (current.end > next.start) {
       console.warn(`Overlap detected on ${date}: ${current.source} (${current.start}-${current.end}) overlaps with ${next.source} (${next.start}-${next.end})`);
       return false;
@@ -788,6 +788,66 @@ function validateSessionTimes(
   }
 
   return true;
+}
+
+// Fix micro-overlaps (<= 2 minutes) between consecutive sessions on a day by nudging start times forward
+function fixMicroOverlapsOnDay(plan: StudyPlan, settings: UserSettings) {
+  const toMin = (t: string) => {
+    const [h, m] = t.split(':').map(Number);
+    return (h || 0) * 60 + (m || 0);
+  };
+  const toTime = (mins: number) => {
+    const mm = ((mins % (24 * 60)) + (24 * 60)) % (24 * 60);
+    const h = Math.floor(mm / 60);
+    const m = mm % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  };
+
+  const MICRO_OVERLAP_TOLERANCE = 3; // minutes
+  const buffer = settings.bufferTimeBetweenSessions || 0;
+  const startOfDay = (settings.studyWindowStartHour || 6) * 60;
+  const endOfDay = (settings.studyWindowEndHour || 23) * 60;
+
+  // Work on non-skipped sessions sorted by start time
+  const sessions = plan.plannedTasks
+    .filter(s => s.status !== 'skipped' && s.startTime && s.endTime)
+    .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+
+  for (let i = 1; i < sessions.length; i++) {
+    const prev = sessions[i - 1];
+    const cur = sessions[i];
+
+    const prevEnd = toMin(prev.endTime);
+    const curStart = toMin(cur.startTime);
+
+    // Overlap or insufficient buffer
+    const overlap = prevEnd - curStart; // positive if cur starts before prev ends
+    const needsNudge = overlap > 0 && overlap <= MICRO_OVERLAP_TOLERANCE;
+
+    const lacksBuffer = buffer > 0 && curStart - prevEnd < buffer && curStart >= prevEnd;
+
+    if (needsNudge || lacksBuffer) {
+      // Move current session to start right after previous end + buffer
+      const requiredStart = Math.max(prevEnd + buffer, startOfDay);
+      const durationMin = Math.round((cur.allocatedHours || 0) * 60);
+      let newStart = requiredStart;
+      let newEnd = requiredStart + durationMin;
+
+      // If it exceeds end of day, try to pull it back to fit
+      if (newEnd > endOfDay) {
+        newStart = Math.max(startOfDay, endOfDay - durationMin);
+        newEnd = newStart + durationMin;
+        // Ensure we still don't collide with previous after pull-back
+        if (newStart < prevEnd + buffer) {
+          newStart = prevEnd + buffer;
+          newEnd = newStart + durationMin;
+        }
+      }
+
+      cur.startTime = toTime(newStart);
+      cur.endTime = toTime(newEnd);
+    }
+  }
 }
 
 /**
@@ -1010,6 +1070,8 @@ export const reshuffleStudyPlan = (
     }
   }
 
+  // Final pass to eliminate any micro-overlaps
+  reshuffledPlans.forEach(plan => fixMicroOverlapsOnDay(plan, settings));
   return { plans: reshuffledPlans, suggestions };
 };
 
@@ -1583,7 +1645,10 @@ export const generateNewStudyPlan = (
     // Combine sessions of the same task on the same day
     combineSessionsOnSameDay(studyPlans);
 
-    // Validate scheduling for conflicts after all redistribution and combining
+    // Fix micro-overlaps between adjacent sessions
+    studyPlans.forEach(plan => fixMicroOverlapsOnDay(plan, settings));
+
+    // Validate scheduling for conflicts after all redistribution, combining and fixes
     studyPlans.forEach(plan => {
       if (!validateSessionTimes(plan.plannedTasks, fixedCommitments, plan.date)) {
         console.warn(`Scheduling conflicts detected on ${plan.date} after redistribution. Some sessions may overlap.`);
@@ -1713,6 +1778,9 @@ export const generateNewStudyPlan = (
           session.endTime = '';
         }
       }
+
+      // Fix micro-overlaps on this day before final validation
+      fixMicroOverlapsOnDay(plan, settings);
 
       // Validate that no sessions overlap on this day
       if (!validateSessionTimes(plan.plannedTasks, commitmentsForDay, plan.date)) {
@@ -3152,7 +3220,10 @@ export const redistributeAfterTaskDeletion = (
   
   // Combine sessions
   combineSessionsOnSameDay(studyPlans);
-  
+
+  // Fix micro-overlaps across all days after combination
+  studyPlans.forEach(plan => fixMicroOverlapsOnDay(plan, settings));
+
   // MULTIPLE GLOBAL REDISTRIBUTION PASSES for maximum filling
   let redistributionPasses = 0;
   const maxRedistributionPasses = 3;
@@ -3215,8 +3286,10 @@ export const redistributeAfterTaskDeletion = (
     
     // Recombine sessions after each pass
     combineSessionsOnSameDay(studyPlans);
+    // And fix any micro-overlaps introduced
+    studyPlans.forEach(plan => fixMicroOverlapsOnDay(plan, settings));
   }
-  
+
   // Assign time slots
   for (const plan of studyPlans) {
     plan.plannedTasks.sort((a, b) => {
