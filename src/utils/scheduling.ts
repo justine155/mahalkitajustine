@@ -574,12 +574,11 @@ export function findNextAvailableTimeSlot(
   });
   
   activeCommitments.forEach(c => {
-    // Handle all-day events - removed blocking logic for work categories
+    // All-day commitments should not block study session scheduling
     if (c.isAllDay) {
-      // All-day events no longer block study session scheduling
       return;
     }
-    
+
     // Determine the actual start and end times for this commitment on this date
     let actualStartTime = c.startTime;
     let actualEndTime = c.endTime;
@@ -653,20 +652,17 @@ for (const interval of busyIntervals) {
     debugLog(`Checking gap: ${Math.floor(current/60)}:${String(current%60).padStart(2,'0')} to ${Math.floor(interval.start/60)}:${String(interval.start%60).padStart(2,'0')} = ${availableGap} minutes (need ${requiredMinutes})`);
   }
   
-  if (availableGap >= requiredMinutes) {
-    // Found a gap that fits - use it immediately
+  // Require buffer before the NEXT busy interval as well
+  if (availableGap >= requiredMinutes + bufferTimeBetweenSessions) {
     const startH = Math.floor(current / 60).toString().padStart(2, '0');
     const startM = (current % 60).toString().padStart(2, '0');
     const endTime = current + requiredMinutes;
     const endH = Math.floor(endTime / 60).toString().padStart(2, '0');
     const endM = (endTime % 60).toString().padStart(2, '0');
-    
-    if (targetDate) {
-      debugLog(`Found slot: ${startH}:${startM} - ${endH}:${endM}`);
-    }
-    
+    if (targetDate) debugLog(`Found slot: ${startH}:${startM} - ${endH}:${endM} (with next-buffer)`);
     return { start: `${startH}:${startM}`, end: `${endH}:${endM}` };
   }
+  // Move current after this busy interval plus buffer
   current = Math.max(current, interval.end + bufferTimeBetweenSessions);
 }
 
@@ -741,13 +737,9 @@ function validateSessionTimes(
       // Check if the commitment or its modification is an all-day event
       const isAllDay = modified?.isAllDay !== undefined ? modified.isAllDay : commitment.isAllDay;
 
-      // For all-day events, block the entire day
+      // For all-day events, do not block the day in validation
       if (isAllDay) {
-        busyIntervals.push({
-          start: 0,
-          end: 24 * 60 - 1,
-          source: `commitment-${commitment.title}-allday`
-        });
+        // Skip adding a busy interval for all-day commitments
       } else {
         // For time-specific events, use the specified times
         const startTime = modified?.startTime || commitment.startTime;
@@ -790,7 +782,7 @@ function validateSessionTimes(
   return true;
 }
 
-// Fix micro-overlaps (<= 2 minutes) between consecutive sessions on a day by nudging start times forward
+// Strictly resolve any overlaps or insufficient buffer between consecutive sessions on a day
 export function fixMicroOverlapsOnDay(plan: StudyPlan, settings: UserSettings) {
   const toMin = (t: string) => {
     const [h, m] = t.split(':').map(Number);
@@ -803,7 +795,6 @@ export function fixMicroOverlapsOnDay(plan: StudyPlan, settings: UserSettings) {
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   };
 
-  const MICRO_OVERLAP_TOLERANCE = 3; // minutes
   const buffer = settings.bufferTimeBetweenSessions || 0;
   const startOfDay = (settings.studyWindowStartHour || 6) * 60;
   const endOfDay = (settings.studyWindowEndHour || 23) * 60;
@@ -820,24 +811,17 @@ export function fixMicroOverlapsOnDay(plan: StudyPlan, settings: UserSettings) {
     const prevEnd = toMin(prev.endTime);
     const curStart = toMin(cur.startTime);
 
-    // Overlap or insufficient buffer
-    const overlap = prevEnd - curStart; // positive if cur starts before prev ends
-    const needsNudge = overlap > 0 && overlap <= MICRO_OVERLAP_TOLERANCE;
-
-    const lacksBuffer = buffer > 0 && curStart - prevEnd < buffer && curStart >= prevEnd;
-
-    if (needsNudge || lacksBuffer) {
-      // Move current session to start right after previous end + buffer
+    // Enforce strict non-overlap and buffer (buffer may be 0)
+    if (curStart < prevEnd + buffer) {
       const requiredStart = Math.max(prevEnd + buffer, startOfDay);
       const durationMin = Math.round((cur.allocatedHours || 0) * 60);
       let newStart = requiredStart;
       let newEnd = requiredStart + durationMin;
 
-      // If it exceeds end of day, try to pull it back to fit
+      // If it exceeds end of day, pull it back as much as possible while keeping buffer
       if (newEnd > endOfDay) {
         newStart = Math.max(startOfDay, endOfDay - durationMin);
         newEnd = newStart + durationMin;
-        // Ensure we still don't collide with previous after pull-back
         if (newStart < prevEnd + buffer) {
           newStart = prevEnd + buffer;
           newEnd = newStart + durationMin;
