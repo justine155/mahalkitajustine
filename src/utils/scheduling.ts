@@ -3141,11 +3141,11 @@ export const redistributeAfterTaskDeletion = (
       });
       
       // Update the plan with combined sessions (keeping skipped sessions separate)
-      const skippedSessions = plan.plannedTasks.filter(session => session.status === 'skipped');
-      plan.plannedTasks = [...combinedSessions, ...skippedSessions];
-      
-      // Calculate totalStudyHours including skipped sessions as "done"
-      plan.totalStudyHours = calculateTotalStudyHours(plan.plannedTasks);
+        const skippedSessions = plan.plannedTasks.filter(session => session.status === 'skipped');
+        plan.plannedTasks = [...combinedSessions, ...skippedSessions];
+
+        // Calculate totalStudyHours based on all planned session durations
+        plan.totalStudyHours = plan.plannedTasks.reduce((sum, s) => sum + s.allocatedHours, 0);
     }
   };
 
