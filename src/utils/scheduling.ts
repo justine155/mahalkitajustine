@@ -791,7 +791,7 @@ function validateSessionTimes(
 }
 
 // Fix micro-overlaps (<= 2 minutes) between consecutive sessions on a day by nudging start times forward
-function fixMicroOverlapsOnDay(plan: StudyPlan, settings: UserSettings) {
+export function fixMicroOverlapsOnDay(plan: StudyPlan, settings: UserSettings) {
   const toMin = (t: string) => {
     const [h, m] = t.split(':').map(Number);
     return (h || 0) * 60 + (m || 0);
