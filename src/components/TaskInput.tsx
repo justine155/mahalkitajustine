@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Plus, Info, HelpCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import { Task, UserSettings, StudyPlan, FixedCommitment } from '../types';
-import { findNextAvailableTimeSlot, doesCommitmentApplyToDate, getEffectiveStudyWindow } from '../utils/scheduling';
+import { findNextAvailableTimeSlot, doesCommitmentApplyToDate, getEffectiveStudyWindow, getDaySpecificDailyHours } from '../utils/scheduling';
 import TimeEstimationModal from './TimeEstimationModal';
 
 interface TaskInputProps {
@@ -363,7 +363,7 @@ const TaskInput: React.FC<TaskInputProps> = ({ onAddTask, onCancel, userSettings
   const isImpactValid = formData.impact !== '';
   const isCustomCategoryValid = !showCustomCategory || (formData.customCategory && formData.customCategory.trim().length > 0 && formData.customCategory.trim().length <= 50);
 
-  const isOneSittingTooLong = formData.isOneTimeTask && totalTime > userSettings.dailyAvailableHours;
+  const isOneSittingTooLong = formData.isOneTimeTask && (() => { const date = formData.deadline || today; return totalTime > getDaySpecificDailyHours(date, userSettings); })();
   const isOneSittingNoTimeSlot = formData.isOneTimeTask && !oneSittingTimeSlotCheck.hasAvailableSlot;
 
   // For one-sitting tasks, we ignore start date validation since they don't use start dates
@@ -406,7 +406,7 @@ const TaskInput: React.FC<TaskInputProps> = ({ onAddTask, onCancel, userSettings
     }
 
     if (isOneSittingTooLong) {
-      errors.push(`One-sitting task (${totalTime}h) exceeds your daily available hours (${userSettings.dailyAvailableHours}h)`);
+      errors.push(`One-sitting task (${totalTime}h) exceeds your available hours for that day`);
     }
 
     if (isOneSittingNoTimeSlot) {
