@@ -8,7 +8,7 @@ import 'react-big-calendar/lib/css/react-big-calendar.css';
 import 'react-big-calendar/lib/addons/dragAndDrop/styles.css';
 import { StudyPlan, FixedCommitment, Task, StudySession, UserSettings } from '../types';
 import { BookOpen, Clock, Settings, X, Calendar as CalendarIcon, Brain } from 'lucide-react';
-import { checkSessionStatus, doesCommitmentApplyToDate, getDaySpecificDailyHours } from '../utils/scheduling';
+import { checkSessionStatus, doesCommitmentApplyToDate, getDaySpecificDailyHours, fixMicroOverlapsOnDay } from '../utils/scheduling';
 import { getLocalDateString } from '../utils/scheduling';
 import MobileCalendarView from './MobileCalendarView';
 
@@ -1041,6 +1041,12 @@ const CalendarView: React.FC<CalendarViewProps> = ({
         updatedPlans[originalPlanIndex] = { ...originalPlan, plannedTasks: updatedOriginalTasks };
       }
     }
+
+    // Fix micro-overlaps on affected day(s)
+    const targetIdx = updatedPlans.findIndex(p => p.date === targetDate);
+    if (targetIdx >= 0 && settings) fixMicroOverlapsOnDay(updatedPlans[targetIdx], settings);
+    const origIdx = updatedPlans.findIndex(p => p.date === originalPlanDate);
+    if (origIdx >= 0 && settings) fixMicroOverlapsOnDay(updatedPlans[origIdx], settings);
 
     onUpdateStudyPlans(updatedPlans);
 
@@ -2155,7 +2161,9 @@ const CalendarView: React.FC<CalendarViewProps> = ({
                         extraBusy.push({ start: slot.start, end: slot.end });
                       }
 
-                      updatedPlans[planIndex] = { ...plan, plannedTasks: tasksCopy };
+                      const planAfter = { ...plan, plannedTasks: tasksCopy };
+                      fixMicroOverlapsOnDay(planAfter, settings!);
+                      updatedPlans[planIndex] = planAfter;
                       onUpdateStudyPlans(updatedPlans);
                       if (overlaps.length) {
                         setDragFeedback(`Moved ${overlaps.length} session(s) to accommodate commitment`);
@@ -2234,7 +2242,9 @@ const CalendarView: React.FC<CalendarViewProps> = ({
                         extraBusy.push({ start: slot.start, end: slot.end });
                       }
 
-                      updatedPlans[planIndex] = { ...plan, plannedTasks: tasksCopy };
+                      const planAfter = { ...plan, plannedTasks: tasksCopy };
+                      fixMicroOverlapsOnDay(planAfter, settings!);
+                      updatedPlans[planIndex] = planAfter;
                       onUpdateStudyPlans(updatedPlans);
                       if (overlaps.length) {
                         setDragFeedback(`Moved ${overlaps.length} session(s) to accommodate commitment`);
