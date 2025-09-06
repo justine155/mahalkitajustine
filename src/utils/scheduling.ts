@@ -20,53 +20,8 @@ export const getDaySpecificDailyHours = (date: string, settings: UserSettings): 
 };
 
 // Helper function to calculate committed hours for a specific date that count toward daily hours
-export const calculateCommittedHoursForDate = (date: string, commitments: FixedCommitment[]): number => {
-  // Sum durations (in hours) of commitments that apply to the date and count toward daily hours
-  // Note: All-day commitments are ignored here for capacity subtraction to avoid over-restricting the day
-  // since daily capacity logic already considers study windows. Modified occurrences and day-specific timings are respected.
-  const toMinutes = (t?: string) => {
-    if (!t) return 0;
-    const [h, m] = t.split(":").map(Number);
-    return (h || 0) * 60 + (m || 0);
-  };
-
-  let totalMinutes = 0;
-
-  const applicable = commitments.filter(c => c.countsTowardDailyHours && doesCommitmentApplyToDate(c, date));
-
-  for (const c of applicable) {
-    // Determine occurrence for this date (consider modified occurrences and day-specific timings)
-    let isAllDay = !!c.isAllDay;
-    let startTime = c.startTime;
-    let endTime = c.endTime;
-
-    const mod = c.modifiedOccurrences?.[date];
-    if (mod) {
-      if (typeof mod.isAllDay === 'boolean') isAllDay = mod.isAllDay;
-      if (mod.startTime) startTime = mod.startTime;
-      if (mod.endTime) endTime = mod.endTime;
-    } else if (c.useDaySpecificTiming && c.daySpecificTimings) {
-      const dow = new Date(date).getDay();
-      const timing = c.daySpecificTimings.find(t => t.dayOfWeek === dow);
-      if (timing) {
-        if (typeof timing.isAllDay === 'boolean') isAllDay = timing.isAllDay;
-        startTime = timing.startTime || startTime;
-        endTime = timing.endTime || endTime;
-      }
-    }
-
-    // Skip all-day for capacity subtraction to avoid wiping the day
-    if (isAllDay) {
-      continue;
-    }
-
-    if (startTime && endTime) {
-      const dur = Math.max(0, toMinutes(endTime) - toMinutes(startTime));
-      totalMinutes += dur;
-    }
-  }
-
-  return Math.round((totalMinutes / 60) * 1000) / 1000; // hours, rounded to 0.001h
+export const calculateCommittedHoursForDate = (_date: string, _commitments: FixedCommitment[]): number => {
+  return 0;
 };
 
 // Utility functions
@@ -717,7 +672,7 @@ function validateSessionTimes(
     if (commitment.recurring) {
       // Check day of week match
       const dayOfWeekMatches = commitment.daysOfWeek.includes(new Date(date).getDay());
-
+      
       if (dayOfWeekMatches) {
         // Check date range if specified
         if (commitment.dateRange?.startDate && commitment.dateRange?.endDate) {
@@ -737,10 +692,10 @@ function validateSessionTimes(
     if (appliesToDate && !commitment.deletedOccurrences?.includes(date)) {
       // Check for modified occurrences
       const modified = commitment.modifiedOccurrences?.[date];
-
+      
       // Check if the commitment or its modification is an all-day event
       const isAllDay = modified?.isAllDay !== undefined ? modified.isAllDay : commitment.isAllDay;
-
+      
       // For all-day events, block the entire day
       if (isAllDay) {
         busyIntervals.push({
@@ -752,7 +707,7 @@ function validateSessionTimes(
         // For time-specific events, use the specified times
         const startTime = modified?.startTime || commitment.startTime;
         const endTime = modified?.endTime || commitment.endTime;
-
+        
         if (startTime && endTime) {
           busyIntervals.push({
             start: timeToMinutes(startTime),
@@ -780,7 +735,7 @@ function validateSessionTimes(
   for (let i = 0; i < busyIntervals.length - 1; i++) {
     const current = busyIntervals[i];
     const next = busyIntervals[i + 1];
-
+    
     if (current.end > next.start) {
       console.warn(`Overlap detected on ${date}: ${current.source} (${current.start}-${current.end}) overlaps with ${next.source} (${next.start}-${next.end})`);
       return false;
@@ -788,66 +743,6 @@ function validateSessionTimes(
   }
 
   return true;
-}
-
-// Fix micro-overlaps (<= 2 minutes) between consecutive sessions on a day by nudging start times forward
-export function fixMicroOverlapsOnDay(plan: StudyPlan, settings: UserSettings) {
-  const toMin = (t: string) => {
-    const [h, m] = t.split(':').map(Number);
-    return (h || 0) * 60 + (m || 0);
-  };
-  const toTime = (mins: number) => {
-    const mm = ((mins % (24 * 60)) + (24 * 60)) % (24 * 60);
-    const h = Math.floor(mm / 60);
-    const m = mm % 60;
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-  };
-
-  const MICRO_OVERLAP_TOLERANCE = 3; // minutes
-  const buffer = settings.bufferTimeBetweenSessions || 0;
-  const startOfDay = (settings.studyWindowStartHour || 6) * 60;
-  const endOfDay = (settings.studyWindowEndHour || 23) * 60;
-
-  // Work on non-skipped sessions sorted by start time
-  const sessions = plan.plannedTasks
-    .filter(s => s.status !== 'skipped' && s.startTime && s.endTime)
-    .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
-
-  for (let i = 1; i < sessions.length; i++) {
-    const prev = sessions[i - 1];
-    const cur = sessions[i];
-
-    const prevEnd = toMin(prev.endTime);
-    const curStart = toMin(cur.startTime);
-
-    // Overlap or insufficient buffer
-    const overlap = prevEnd - curStart; // positive if cur starts before prev ends
-    const needsNudge = overlap > 0 && overlap <= MICRO_OVERLAP_TOLERANCE;
-
-    const lacksBuffer = buffer > 0 && curStart - prevEnd < buffer && curStart >= prevEnd;
-
-    if (needsNudge || lacksBuffer) {
-      // Move current session to start right after previous end + buffer
-      const requiredStart = Math.max(prevEnd + buffer, startOfDay);
-      const durationMin = Math.round((cur.allocatedHours || 0) * 60);
-      let newStart = requiredStart;
-      let newEnd = requiredStart + durationMin;
-
-      // If it exceeds end of day, try to pull it back to fit
-      if (newEnd > endOfDay) {
-        newStart = Math.max(startOfDay, endOfDay - durationMin);
-        newEnd = newStart + durationMin;
-        // Ensure we still don't collide with previous after pull-back
-        if (newStart < prevEnd + buffer) {
-          newStart = prevEnd + buffer;
-          newEnd = newStart + durationMin;
-        }
-      }
-
-      cur.startTime = toTime(newStart);
-      cur.endTime = toTime(newEnd);
-    }
-  }
 }
 
 /**
@@ -932,7 +827,7 @@ export const reshuffleStudyPlan = (
     date,
     plannedTasks: [],
     totalStudyHours: 0,
-    availableHours: getDaySpecificDailyHours(date, settings)
+    availableHours: settings.dailyAvailableHours
   }));
 
   // Copy over completed/skipped sessions first
@@ -1070,8 +965,6 @@ export const reshuffleStudyPlan = (
     }
   }
 
-  // Final pass to eliminate any micro-overlaps
-  reshuffledPlans.forEach(plan => fixMicroOverlapsOnDay(plan, settings));
   return { plans: reshuffledPlans, suggestions };
 };
 
@@ -1127,7 +1020,7 @@ const handleCompromisedSessions = (
       // 3. Session duration is significantly smaller than other sessions of the same task
 
       const dayPlan = studyPlans[item.planIndex];
-      const dayCapacity = (dayPlan.availableHours ?? getDaySpecificDailyHours(planDate, settings));
+      const dayCapacity = settings.dailyAvailableHours;
       const dayUtilization = dayPlan.totalStudyHours / dayCapacity;
 
       const averageSessionLength = sessionItems.reduce((sum, si) => sum + si.session.allocatedHours, 0) / sessionItems.length;
@@ -1478,9 +1371,9 @@ export const generateNewStudyPlan = (
         // Update the plan with combined sessions (keeping skipped sessions separate)
         const skippedSessions = plan.plannedTasks.filter(session => session.status === 'skipped');
         plan.plannedTasks = [...combinedSessions, ...skippedSessions];
-
-        // Calculate totalStudyHours based on all planned session durations
-        plan.totalStudyHours = plan.plannedTasks.reduce((sum, s) => sum + s.allocatedHours, 0);
+        
+        // Calculate totalStudyHours including skipped sessions as "done"
+        plan.totalStudyHours = calculateTotalStudyHours(plan.plannedTasks);
       }
     };
 
@@ -1569,7 +1462,59 @@ export const generateNewStudyPlan = (
         }
 
         if (!scheduledOneSitting) {
-          // Do NOT split one-sitting tasks. Leave unscheduled to avoid affecting other sessions.
+          // Smart fallback: try to find alternative solutions
+          const fallbackResult = handleOneSittingFallback(
+            task,
+            totalHours,
+            daysForTask,
+            dailyRemainingHours,
+            settings
+          );
+
+          if (fallbackResult.scheduled) {
+            // Successfully scheduled with fallback approach
+            for (const { date, hours } of fallbackResult.scheduledSessions) {
+              let dayPlan = studyPlans.find(p => p.date === date)!;
+              const roundedHours = Math.round(hours * 60) / 60;
+
+              // Find available time slot for fallback session
+              const commitmentsForDay = fixedCommitments.filter(commitment => {
+                return doesCommitmentApplyToDate(commitment, date);
+              });
+
+              const timeSlot = findNextAvailableTimeSlot(
+                roundedHours,
+                dayPlan.plannedTasks,
+                commitmentsForDay,
+                settings.studyWindowStartHour || 6,
+                settings.studyWindowEndHour || 23,
+                settings.bufferTimeBetweenSessions || 0,
+                date,
+                settings
+              );
+
+              if (timeSlot) {
+                dayPlan.plannedTasks.push({
+                  taskId: task.id,
+                  scheduledTime: date,
+                  startTime: timeSlot.start,
+                  endTime: timeSlot.end,
+                  allocatedHours: roundedHours,
+                  sessionNumber: fallbackResult.scheduledSessions.indexOf({ date, hours }) + 1,
+                  isFlexible: true,
+                  status: 'scheduled'
+                });
+
+                dayPlan.totalStudyHours = Math.round((dayPlan.totalStudyHours + roundedHours) * 60) / 60;
+                dailyRemainingHours[date] = Math.round((dailyRemainingHours[date] - roundedHours) * 60) / 60;
+              } else {
+                console.log(`No available time slot found for fallback session of task "${task.title}" (${roundedHours}h) on ${date}`);
+              }
+            }
+            totalHours = Math.round((totalHours - fallbackResult.totalScheduled) * 60) / 60;
+          }
+
+          // Track any remaining unscheduled hours
           if (totalHours > 0) {
             unscheduledHours += totalHours;
           }
@@ -1645,10 +1590,7 @@ export const generateNewStudyPlan = (
     // Combine sessions of the same task on the same day
     combineSessionsOnSameDay(studyPlans);
 
-    // Fix micro-overlaps between adjacent sessions
-    studyPlans.forEach(plan => fixMicroOverlapsOnDay(plan, settings));
-
-    // Validate scheduling for conflicts after all redistribution, combining and fixes
+    // Validate scheduling for conflicts after all redistribution and combining
     studyPlans.forEach(plan => {
       if (!validateSessionTimes(plan.plannedTasks, fixedCommitments, plan.date)) {
         console.warn(`Scheduling conflicts detected on ${plan.date} after redistribution. Some sessions may overlap.`);
@@ -1779,9 +1721,6 @@ export const generateNewStudyPlan = (
         }
       }
 
-      // Fix micro-overlaps on this day before final validation
-      fixMicroOverlapsOnDay(plan, settings);
-
       // Validate that no sessions overlap on this day
       if (!validateSessionTimes(plan.plannedTasks, commitmentsForDay, plan.date)) {
         console.error(`Session overlap detected on ${plan.date} - some sessions may be incorrectly scheduled`);
@@ -1812,7 +1751,7 @@ export const generateNewStudyPlan = (
             date,
             plannedTasks: [],
             totalStudyHours: 0,
-            availableHours: getDaySpecificDailyHours(date, settings)
+            availableHours: settings.dailyAvailableHours
           });
         }
       });
@@ -2841,12 +2780,11 @@ export const moveIndividualSession = (
   if (todayPlan && settings.workDays.includes(new Date().getDay())) {
     const availableSlots = getDailyAvailableTimeSlots(
       new Date(today),
-      getDaySpecificDailyHours(today, settings),
+      settings.dailyAvailableHours,
       fixedCommitments,
       settings.workDays,
       settings.studyWindowStartHour || 6,
-      settings.studyWindowEndHour || 23,
-      settings
+      settings.studyWindowEndHour || 23
     );
     
     if (availableSlots.length > 0) {
@@ -3158,11 +3096,11 @@ export const redistributeAfterTaskDeletion = (
       });
       
       // Update the plan with combined sessions (keeping skipped sessions separate)
-        const skippedSessions = plan.plannedTasks.filter(session => session.status === 'skipped');
-        plan.plannedTasks = [...combinedSessions, ...skippedSessions];
-
-        // Calculate totalStudyHours based on all planned session durations
-        plan.totalStudyHours = plan.plannedTasks.reduce((sum, s) => sum + s.allocatedHours, 0);
+      const skippedSessions = plan.plannedTasks.filter(session => session.status === 'skipped');
+      plan.plannedTasks = [...combinedSessions, ...skippedSessions];
+      
+      // Calculate totalStudyHours including skipped sessions as "done"
+      plan.totalStudyHours = calculateTotalStudyHours(plan.plannedTasks);
     }
   };
 
@@ -3220,10 +3158,7 @@ export const redistributeAfterTaskDeletion = (
   
   // Combine sessions
   combineSessionsOnSameDay(studyPlans);
-
-  // Fix micro-overlaps across all days after combination
-  studyPlans.forEach(plan => fixMicroOverlapsOnDay(plan, settings));
-
+  
   // MULTIPLE GLOBAL REDISTRIBUTION PASSES for maximum filling
   let redistributionPasses = 0;
   const maxRedistributionPasses = 3;
@@ -3286,10 +3221,8 @@ export const redistributeAfterTaskDeletion = (
     
     // Recombine sessions after each pass
     combineSessionsOnSameDay(studyPlans);
-    // And fix any micro-overlaps introduced
-    studyPlans.forEach(plan => fixMicroOverlapsOnDay(plan, settings));
   }
-
+  
   // Assign time slots
   for (const plan of studyPlans) {
     plan.plannedTasks.sort((a, b) => {
@@ -3925,15 +3858,12 @@ const rebalanceAroundOneSittingTasks = (
   settings: UserSettings,
   fixedCommitments: FixedCommitment[]
 ): StudyPlan[] => {
-  // Step 1: Identify days with large one-sitting tasks using a more permissive threshold
-  // Use day-specific capacity and mark days only when one-sitting occupies >=80% of that day's capacity
+  // Step 1: Identify days with large one-sitting tasks (>60% of daily capacity)
+  const capacityThreshold = settings.dailyAvailableHours * 0.6;
   const daysWithLargeOneSittingTasks = new Set<string>();
   const oneSittingTasksByDay = new Map<string, StudySession[]>();
 
   for (const plan of studyPlans) {
-    const dayCapacity = getDaySpecificDailyHours(plan.date, settings);
-    const capacityThreshold = dayCapacity * 0.8; // relax rigidity: only rebalance when truly dominant
-
     const oneSittingSessions = plan.plannedTasks.filter(session => {
       const task = tasks.find(t => t.id === session.taskId);
       return task?.isOneTimeTask && session.allocatedHours >= capacityThreshold;
@@ -3962,18 +3892,7 @@ const rebalanceAroundOneSittingTasks = (
       return plan;
     }
 
-    // Only rebalance if remaining capacity after keeping all sessions is below a small reserve (e.g., <1h)
-    const dayCapacity = getDaySpecificDailyHours(plan.date, settings);
-
-    // Keep one-sitting tasks and manual schedules, extract others for rebalancing if needed
-    const currentTotal = plan.plannedTasks.reduce((sum, s) => sum + s.allocatedHours, 0);
-    const remainingIfKeepAll = Math.max(0, dayCapacity - currentTotal);
-
-    if (remainingIfKeepAll >= 1) {
-      // Enough room left; don't strip sessions from this day
-      return plan;
-    }
-
+    // Keep one-sitting tasks and manual schedules, extract others for rebalancing
     const sessionsToKeep = plan.plannedTasks.filter(session => {
       const task = tasks.find(t => t.id === session.taskId);
 
@@ -3983,7 +3902,7 @@ const rebalanceAroundOneSittingTasks = (
       }
 
       // Keep manually scheduled sessions
-      if ((session as any).manuallyScheduled) {
+      if (session.manuallyScheduled) {
         return true;
       }
 
@@ -4017,7 +3936,7 @@ const rebalanceAroundOneSittingTasks = (
   // Step 3: Calculate daily capacity across all days
   const dailyCapacity = new Map<string, number>();
   for (const plan of rebalancedPlans) {
-    const remainingCapacity = getDaySpecificDailyHours(plan.date, settings) - plan.totalStudyHours;
+    const remainingCapacity = settings.dailyAvailableHours - plan.totalStudyHours;
     dailyCapacity.set(plan.date, Math.max(0, remainingCapacity));
   }
 
@@ -4045,19 +3964,8 @@ const applyWorkloadSmoothing = (
   const dailyWorkloads = new Map<string, number>();
   const movableSessions = new Map<string, StudySession[]>();
 
-  // Track which days contain any one-sitting task
-  const daysWithOneSitting = new Set<string>();
-
   for (const plan of studyPlans) {
     dailyWorkloads.set(plan.date, plan.totalStudyHours);
-
-    // Mark days that contain one-sitting tasks
-    if (plan.plannedTasks.some(s => {
-      const t = tasks.find(tt => tt.id === s.taskId);
-      return t?.isOneTimeTask;
-    })) {
-      daysWithOneSitting.add(plan.date);
-    }
 
     // Identify sessions that can be moved (non-one-sitting, non-manual, non-completed)
     const movable = plan.plannedTasks.filter(session => {
@@ -4089,13 +3997,12 @@ const applyWorkloadSmoothing = (
   const overloadThreshold = avgWorkload + (workloadVariation * 0.3);
   const underloadThreshold = avgWorkload - (workloadVariation * 0.3);
 
-  // Exclude days that contain one-sitting tasks from being sources or targets
   const overloadedDays = Array.from(dailyWorkloads.entries())
-    .filter(([date, workload]) => workload > overloadThreshold && !daysWithOneSitting.has(date))
+    .filter(([, workload]) => workload > overloadThreshold)
     .sort(([, a], [, b]) => b - a); // Most overloaded first
 
   const underloadedDays = Array.from(dailyWorkloads.entries())
-    .filter(([date, workload]) => workload < underloadThreshold && !daysWithOneSitting.has(date))
+    .filter(([, workload]) => workload < underloadThreshold)
     .sort(([, a], [, b]) => a - b); // Least loaded first
 
   // Move sessions from overloaded to underloaded days
@@ -4173,7 +4080,7 @@ const findSuitableUnderloadedDay = (
 
     // Check if adding this session would create a reasonable workload
     const newWorkload = currentWorkload + session.allocatedHours;
-    if (newWorkload <= avgWorkload + 1 && newWorkload <= getDaySpecificDailyHours(underloadedDate, settings)) {
+    if (newWorkload <= avgWorkload + 1 && newWorkload <= settings.dailyAvailableHours) {
       return underloadedDate;
     }
   }
@@ -4317,10 +4224,10 @@ export const generateNewStudyPlanWithPreservation = (
   // Apply manual schedule preservation (includes fixed sessions)
   const preservedPlans = preserveManualSchedules(result.plans, existingWithFixed, { preserveManualReschedules: true });
 
-  // Skip special rebalancing around one-sitting tasks to avoid evicting other sessions
-  const balancedPlans = preservedPlans;
+  // Apply intelligent workload balancing around one-sitting tasks
+  const balancedPlans = rebalanceAroundOneSittingTasks(preservedPlans, tasks, settings, fixedCommitments);
 
-  // Apply final workload smoothing (won't move sessions from days with one-sitting tasks)
+  // Apply final workload smoothing to minimize daily variation
   const smoothedPlans = applyWorkloadSmoothing(balancedPlans, tasks, settings, fixedCommitments);
 
   // FINAL SAFETY PASS: ensure all previously completed/skipped sessions are preserved exactly as-is
@@ -4342,7 +4249,7 @@ export const generateNewStudyPlanPreservingFixedOnly = (
   const existingWithFixed = markPastSessionsAsSkipped(existingStudyPlans);
   const result = generateNewStudyPlan(tasks, settings, fixedCommitments, existingWithFixed);
   const preservedFixedOnly = preserveManualSchedules(result.plans, existingWithFixed, { preserveManualReschedules: false });
-  const balancedPlans = preservedFixedOnly; // do not rebalance around one-sitting tasks
+  const balancedPlans = rebalanceAroundOneSittingTasks(preservedFixedOnly, tasks, settings, fixedCommitments);
   const smoothedPlans = applyWorkloadSmoothing(balancedPlans, tasks, settings, fixedCommitments);
   const finalPlans = preserveFixedSessionsPostProcessing(smoothedPlans, existingWithFixed);
   return { plans: finalPlans, suggestions: result.suggestions };
