@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { BookOpen, Edit, Trash2, CheckCircle2, X, Info, ChevronDown, ChevronUp, ArrowUpDown, ArrowUp, ArrowDown, HelpCircle } from 'lucide-react';
 import { Task, UserSettings, StudyPlan } from '../types';
-import { formatTime, calculateSessionDistribution } from '../utils/scheduling';
+import { formatTime, calculateSessionDistribution, getDaySpecificDailyHours } from '../utils/scheduling';
 
 interface TaskListProps {
   tasks: Task[];
@@ -230,7 +230,8 @@ const TaskList: React.FC<TaskListProps> = ({ tasks, studyPlans = [], onUpdateTas
 
     if (editFormData.isOneTimeTask) {
       if (!editFormData.deadline || editFormData.deadline.trim() === '') errors.push('One-sitting tasks require a deadline');
-      if (totalHours > userSettings.dailyAvailableHours) errors.push(`One-sitting task (${totalHours}h) exceeds your daily available hours (${userSettings.dailyAvailableHours}h)`);
+      const cap = getDaySpecificDailyHours(editFormData.deadline || today, userSettings);
+      if (totalHours > cap) errors.push(`One-sitting task (${totalHours}h) exceeds your available hours for that day`);
     }
 
     return errors;
@@ -376,7 +377,8 @@ const TaskList: React.FC<TaskListProps> = ({ tasks, studyPlans = [], onUpdateTas
     // One-sitting task validation
     if (editFormData.isOneTimeTask) {
       if (!editFormData.deadline || editFormData.deadline.trim() === '') return false; // One-sitting requires deadline
-      if (totalHours > userSettings.dailyAvailableHours) return false; // Can't exceed daily hours
+      const cap = getDaySpecificDailyHours(editFormData.deadline || today, userSettings);
+      if (totalHours > cap) return false; // Can't exceed day's available hours
     }
 
     return true;
