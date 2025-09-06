@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Plus, Info, HelpCircle, ChevronDown, ChevronUp, Clock, X } from 'lucide-react';
 import { Task, UserSettings, StudyPlan, FixedCommitment } from '../types';
-import { findNextAvailableTimeSlot, doesCommitmentApplyToDate, getEffectiveStudyWindow, calculateSessionDistribution } from '../utils/scheduling';
+import { findNextAvailableTimeSlot, doesCommitmentApplyToDate, getEffectiveStudyWindow, calculateSessionDistribution, getDaySpecificDailyHours } from '../utils/scheduling';
 import TimeEstimationModal from './TimeEstimationModal';
 
 interface TaskInputProps {
@@ -232,7 +232,10 @@ const TaskInputSimplified: React.FC<TaskInputProps> = ({ onAddTask, onCancel, us
   const isStartDateValid = !formData.startDate || new Date(formData.startDate) >= new Date(today);
 
   // One-sitting task validation checks
-  const isOneSittingTooLong = formData.isOneTimeTask && estimatedDecimalHours > userSettings.dailyAvailableHours;
+  const isOneSittingTooLong = formData.isOneTimeTask && (() => {
+    const date = formData.deadline || new Date().toISOString().split('T')[0];
+    return estimatedDecimalHours > getDaySpecificDailyHours(date, userSettings);
+  })();
 
   // Check if deadline allows for one-sitting task
   const oneSittingTimeSlotCheck = useMemo(() => {
