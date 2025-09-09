@@ -828,6 +828,105 @@ const CalendarView: React.FC<CalendarViewProps> = ({
     return null;
   };
 
+  // Helper: get a commitment's concrete time for a specific date
+  const getCommitmentTimeOnDate = (
+    c: FixedCommitment,
+    date: string
+  ): { start?: Date; end?: Date; isAllDay: boolean } => {
+    const mod = c.modifiedOccurrences?.[date];
+    const isAllDay = !!(mod?.isAllDay ?? c.isAllDay);
+    if (isAllDay) return { isAllDay: true };
+
+    let startStr: string | undefined;
+    let endStr: string | undefined;
+    if (mod?.startTime && mod?.endTime) {
+      startStr = mod.startTime; endStr = mod.endTime;
+    } else if (c.useDaySpecificTiming && c.daySpecificTimings) {
+      const dow = new Date(date).getDay();
+      const t = c.daySpecificTimings.find(t => t.dayOfWeek === dow);
+      if (t && !t.isAllDay) { startStr = t.startTime; endStr = t.endTime; }
+    } else {
+      startStr = c.startTime; endStr = c.endTime;
+    }
+    if (startStr && endStr) {
+      return {
+        start: moment(`${date} ${startStr}`).toDate(),
+        end: moment(`${date} ${endStr}`).toDate(),
+        isAllDay: false
+      };
+    }
+    return { isAllDay: false };
+  };
+
+  // Variant that accepts extra busy blocks and excludes specific commitments (by id)
+  const findNearestSlotForCommitmentWithBusy = (
+    targetStart: Date,
+    durationHours: number,
+    targetDate: string,
+    excludeCommitmentIds: Set<string>,
+    extraBusy: Array<{ start: Date; end: Date }>
+  ): { start: Date; end: Date } | null => {
+    if (!settings) return null;
+    const bufferTimeMs = (settings.bufferTimeBetweenSessions || 0) * 60 * 1000;
+
+    const busy: Array<{ start: Date; end: Date }> = [];
+
+    // Block study sessions
+    studyPlans.forEach(plan => {
+      if (plan.date !== targetDate) return;
+      plan.plannedTasks.forEach(s => {
+        if (s.status === 'skipped' || !s.startTime || !s.endTime) return;
+        const sStart = moment(`${targetDate} ${s.startTime}`).toDate();
+        const sEnd = moment(`${targetDate} ${s.endTime}`).toDate();
+        busy.push({ start: sStart, end: sEnd });
+      });
+    });
+
+    // Block other commitments not excluded
+    fixedCommitments.forEach(c => {
+      if (excludeCommitmentIds.has(c.id)) return;
+      if (!doesCommitmentApplyToDate(c, targetDate)) return;
+      const t = getCommitmentTimeOnDate(c, targetDate);
+      if (t.isAllDay || !t.start || !t.end) return;
+      busy.push({ start: t.start, end: t.end });
+    });
+
+    // Add extra busy intervals (already placed blocks)
+    extraBusy.forEach(b => busy.push(b));
+
+    busy.sort((a, b) => a.start.getTime() - b.start.getTime());
+
+    const dayStart = moment(targetDate).startOf('day').toDate();
+    const dayEnd = moment(targetDate).endOf('day').toDate();
+    const durMs = durationHours * 60 * 60 * 1000;
+
+    const isValid = (s: Date, e: Date) => {
+      if (s < dayStart || e > dayEnd) return false;
+      for (const b of busy) {
+        const adjS = new Date(s.getTime() - bufferTimeMs);
+        const adjE = new Date(e.getTime() + bufferTimeMs);
+        if (adjS < b.end && adjE > b.start) return false;
+      }
+      return true;
+    };
+
+    const SNAP = timeInterval * 60 * 1000;
+    const exactEnd = new Date(targetStart.getTime() + durMs);
+    if (isValid(targetStart, exactEnd)) return { start: targetStart, end: exactEnd };
+    const rounded = new Date(Math.round(targetStart.getTime() / SNAP) * SNAP);
+    const roundedEnd = new Date(rounded.getTime() + durMs);
+    if (isValid(rounded, roundedEnd)) return { start: rounded, end: roundedEnd };
+    const maxSearch = 6 * 60 * 60 * 1000;
+    for (let off = SNAP; off <= maxSearch; off += SNAP) {
+      for (const dir of [1, -1]) {
+        const s = new Date(rounded.getTime() + dir * off);
+        const e = new Date(s.getTime() + durMs);
+        if (isValid(s, e)) return { start: s, end: e };
+      }
+    }
+    return null;
+  };
+
   // Handle drag start
   const handleDragStart = (event: any) => {
     setIsDragging(true);
@@ -871,16 +970,63 @@ const CalendarView: React.FC<CalendarViewProps> = ({
 
       const durationMinutes = Math.max(5, Math.round(moment(end).diff(moment(start), 'minutes')));
       const durationHours = durationMinutes / 60;
-      const slot = findNearestAvailableSlotForCommitment(start, durationHours, targetDate, commitment);
-      if (!slot) {
+
+      // Attempt to place at drop time if it doesn't conflict with study sessions (commitments are movable)
+      const intendedStart = new Date(start);
+      const intendedEnd = new Date(intendedStart.getTime() + durationMinutes * 60 * 1000);
+
+      // Check only session conflicts
+      let sessionConflict = false;
+      studyPlans.forEach(plan => {
+        if (plan.date !== targetDate) return;
+        plan.plannedTasks.forEach(s => {
+          if (s.status === 'skipped' || !s.startTime || !s.endTime) return;
+          const sStart = moment(`${targetDate} ${s.startTime}`).toDate();
+          const sEnd = moment(`${targetDate} ${s.endTime}`).toDate();
+          if (intendedStart < sEnd && intendedEnd > sStart) sessionConflict = true;
+        });
+      });
+
+      let placed = sessionConflict
+        ? findNearestAvailableSlotForCommitment(intendedStart, durationHours, targetDate, commitment)
+        : { start: intendedStart, end: intendedEnd };
+
+      if (!placed) {
         setDragFeedback('No available time slot found for this commitment');
         setTimeout(() => setDragFeedback(''), 3000);
         return;
       }
 
-      const finalStart = moment(slot.start).format('HH:mm');
-      const finalEnd = moment(slot.end).format('HH:mm');
+      // Determine commitments overlapping the placed interval on this date
+      const overlaps = fixedCommitments
+        .filter(c => c.id !== commitment.id && doesCommitmentApplyToDate(c, targetDate))
+        .map(c => ({ c, t: getCommitmentTimeOnDate(c, targetDate) }))
+        .filter(({ t }) => t.start && t.end && !t.isAllDay)
+        .filter(({ t }) => placed!.start < (t.end as Date) && placed!.end > (t.start as Date));
 
+      // Relocate overlapping commitments cascade
+      const extraBusy: Array<{ start: Date; end: Date }> = [{ start: placed.start, end: placed.end }];
+      const relocations: Array<{ id: string; start: Date; end: Date }> = [];
+
+      // Sort overlaps by proximity to placed start to minimize ripple
+      overlaps.sort((a, b) => Math.abs((a.t.start as Date).getTime() - placed.start.getTime()) - Math.abs((b.t.start as Date).getTime() - placed.start.getTime()));
+
+      for (const { c, t } of overlaps) {
+        const durH = ((t!.end as Date).getTime() - (t!.start as Date).getTime()) / (1000 * 60 * 60);
+        const targetStartForThis = t!.start as Date;
+        const slot2 = findNearestSlotForCommitmentWithBusy(targetStartForThis, durH, targetDate, new Set<string>([commitment.id, c.id]), extraBusy);
+        if (!slot2) {
+          setDragFeedback('Unable to move one or more commitments');
+          setTimeout(() => setDragFeedback(''), 3000);
+          return;
+        }
+        relocations.push({ id: c.id, start: slot2.start, end: slot2.end });
+        extraBusy.push({ start: slot2.start, end: slot2.end });
+      }
+
+      // Apply updates: first moving commitment, then relocated ones
+      const finalStart = moment(placed.start).format('HH:mm');
+      const finalEnd = moment(placed.end).format('HH:mm');
       const updated = {
         ...(commitment.modifiedOccurrences || {}),
         [targetDate]: {
@@ -891,14 +1037,32 @@ const CalendarView: React.FC<CalendarViewProps> = ({
           isAllDay: false,
         }
       } as NonNullable<FixedCommitment['modifiedOccurrences']>;
-
       onUpdateCommitment(commitment.id, { modifiedOccurrences: updated });
 
-      const diffMin = Math.abs(moment(slot.start).diff(moment(start), 'minutes'));
-      if (diffMin === 0) setDragFeedback(`✅ Placed at ${finalStart}`);
-      else if (diffMin <= 15) setDragFeedback(`📍 Placed at ${finalStart} (${diffMin}m from target)`);
-      else setDragFeedback(`🔄 Moved to ${finalStart} (nearest available)`);
-      setTimeout(() => setDragFeedback(''), 3000);
+      let movedCount = 0;
+      relocations.forEach(r => {
+        const c = fixedCommitments.find(x => x.id === r.id);
+        if (!c) return;
+        const mods = {
+          ...(c.modifiedOccurrences || {}),
+          [targetDate]: {
+            startTime: moment(r.start).format('HH:mm'),
+            endTime: moment(r.end).format('HH:mm'),
+            title: c.title,
+            category: c.category,
+            isAllDay: false,
+          }
+        } as NonNullable<FixedCommitment['modifiedOccurrences']>;
+        onUpdateCommitment(c.id, { modifiedOccurrences: mods });
+        movedCount += 1;
+      });
+
+      const diffMin = Math.abs(moment(placed.start).diff(moment(intendedStart), 'minutes'));
+      const msg = movedCount > 0
+        ? `✅ Placed at ${finalStart}; moved ${movedCount} overlapping commitment(s)`
+        : (diffMin === 0 ? `✅ Placed at ${finalStart}` : `📍 Placed at ${finalStart} (${diffMin}m from target)`);
+      setDragFeedback(msg);
+      setTimeout(() => setDragFeedback(''), 4000);
       return;
     }
 
