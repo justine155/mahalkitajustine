@@ -3,6 +3,53 @@ import { useMemo, useState } from 'react';
 import { Habit } from '../types';
 import { getLocalDateString } from '../utils/scheduling';
 
+const computeDailyStreak = (dates: Set<string>, todayStr: string) => {
+  let streak = 0;
+  const d = new Date(todayStr);
+  while (true) {
+    const yyyy = d.toISOString().split('T')[0];
+    if (dates.has(yyyy)) {
+      streak += 1;
+      d.setDate(d.getDate() - 1);
+    } else {
+      break;
+    }
+  }
+  return streak;
+};
+
+const computeWeeklyStreak = (history: string[], targetPerWeek: number = 1, todayStr: string) => {
+  const byWeek = new Map<string, number>();
+  history.forEach(d => {
+    const date = new Date(d);
+    const startOfWeek = new Date(date);
+    startOfWeek.setDate(date.getDate() - date.getDay());
+    const key = startOfWeek.toISOString().split('T')[0];
+    byWeek.set(key, (byWeek.get(key) || 0) + 1);
+  });
+  const now = new Date(todayStr);
+  const currentWeekStart = new Date(now);
+  currentWeekStart.setDate(now.getDate() - now.getDay());
+  const currentWeekKey = currentWeekStart.toISOString().split('T')[0];
+  const currentWeekCount = byWeek.get(currentWeekKey) || 0;
+
+  let prevStreak = 0;
+  const weekIter = new Date(currentWeekStart);
+  weekIter.setDate(weekIter.getDate() - 7);
+  while (true) {
+    const key = weekIter.toISOString().split('T')[0];
+    const count = byWeek.get(key) || 0;
+    if (count >= targetPerWeek) {
+      prevStreak += 1;
+      weekIter.setDate(weekIter.getDate() - 7);
+    } else {
+      break;
+    }
+  }
+
+  return currentWeekCount >= targetPerWeek ? prevStreak + 1 : prevStreak;
+};
+
 interface HabitTrackerProps {
   habits: Habit[];
   onAddHabit: (habit: { title: string; cadence: 'daily' | 'weekly'; targetPerWeek?: number; reminder?: boolean }) => void;
@@ -136,7 +183,7 @@ export default function HabitTracker({ habits, onAddHabit, onToggleHabitToday, o
                         </span>
                       )}
                       <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200 inline-flex items-center gap-1">
-                        <Flame className="w-3 h-3" /> Streak: {habit.streak}
+                        <Flame className="w-3 h-3" /> Streak: {habit.cadence === 'daily' ? computeDailyStreak(new Set(habit.history), today) : computeWeeklyStreak(habit.history, habit.targetPerWeek || 1, today)}
                       </span>
                     </div>
 
