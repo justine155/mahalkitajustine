@@ -3,7 +3,7 @@ import { Calendar, CheckSquare, Clock, Settings as SettingsIcon, BarChart3, Cale
 import { Task, StudyPlan, UserSettings, FixedCommitment, Commitment, StudySession, TimerState, Habit } from './types';
 import { GamificationData, Achievement, DailyChallenge, MotivationalMessage } from './types-gamification';
 import { useRobustTimer, startTimer, pauseTimer, resumeTimer, resetTimer, updateTimerTime } from './hooks/useRobustTimer';
-import { getUnscheduledMinutesForTasks, getLocalDateString, checkCommitmentConflicts, generateNewStudyPlan, generateNewStudyPlanWithPreservation, generateNewStudyPlanPreservingFixedOnly, reshuffleStudyPlan, markPastSessionsAsSkipped, formatTime } from './utils/scheduling';
+import { getUnscheduledMinutesForTasks, getLocalDateString, checkCommitmentConflicts, generateNewStudyPlan, generateNewStudyPlanWithPreservation, generateNewStudyPlanPreservingFixedOnly, reshuffleStudyPlan, markPastSessionsAsSkipped, formatTime, doesCommitmentApplyToDate } from './utils/scheduling';
 import { getAccurateUnscheduledTasks, shouldShowNotifications, getNotificationPriority } from './utils/enhanced-notifications';
 import { enhancedEstimationTracker } from './utils/enhanced-estimation-tracker';
 import {
@@ -965,6 +965,115 @@ function App() {
         return fixedCommitments;
     };
 
+    // Helpers to resolve commitment overlaps comprehensively
+    const timeToMinutesLocal = (t?: string) => {
+        if (!t) return 0;
+        const [h, m] = t.split(':').map(Number);
+        return (h || 0) * 60 + (m || 0);
+    };
+
+    const getOccurrenceOnDate = (c: FixedCommitment, date: string): { isAllDay: boolean; startTime?: string; endTime?: string } => {
+        let isAllDay = !!c.isAllDay;
+        let startTime = c.startTime;
+        let endTime = c.endTime;
+        const mod = c.modifiedOccurrences?.[date];
+        if (mod) {
+            if (typeof mod.isAllDay === 'boolean') isAllDay = mod.isAllDay;
+            if (mod.startTime) startTime = mod.startTime;
+            if (mod.endTime) endTime = mod.endTime;
+        } else if (c.useDaySpecificTiming && c.daySpecificTimings) {
+            const dow = new Date(date).getDay();
+            const t = c.daySpecificTimings.find(tt => tt.dayOfWeek === dow);
+            if (t) {
+                if (typeof t.isAllDay === 'boolean') isAllDay = t.isAllDay;
+                if (t.startTime) startTime = t.startTime;
+                if (t.endTime) endTime = t.endTime;
+            }
+        }
+        return { isAllDay, startTime, endTime };
+    };
+
+    const timesOverlapLocal = (aStart?: string, aEnd?: string, bStart?: string, bEnd?: string): boolean => {
+        if (!aStart || !aEnd || !bStart || !bEnd) return true; // treat incomplete times as overlapping
+        return !(
+            timeToMinutesLocal(aEnd) <= timeToMinutesLocal(bStart) ||
+            timeToMinutesLocal(aStart) >= timeToMinutesLocal(bEnd)
+        );
+    };
+
+    const applyOneTimeOverridesToRecurring = (one: FixedCommitment, existing: FixedCommitment[]) => {
+        if (!one.specificDates?.length) return existing;
+        const updated = existing.map(c => ({ ...c }));
+        for (const c of updated) {
+            if (!c.recurring) continue;
+            const toDelete: string[] = [];
+            for (const date of one.specificDates) {
+                if (!doesCommitmentApplyToDate(c, date)) continue;
+                const occR = getOccurrenceOnDate(c, date);
+                const occO = getOccurrenceOnDate(one, date);
+                const overlap = occR.isAllDay || occO.isAllDay || timesOverlapLocal(occR.startTime, occR.endTime, occO.startTime, occO.endTime);
+                if (overlap) toDelete.push(date);
+            }
+            if (toDelete.length) {
+                c.deletedOccurrences = Array.from(new Set([...(c.deletedOccurrences || []), ...toDelete]));
+            }
+        }
+        return updated;
+    };
+
+    const computeRecurringDeletedFromOneTimes = (rec: FixedCommitment, existing: FixedCommitment[]) => {
+        // Determine all dates where this recurring commitment WOULD apply (ignoring current deletions)
+        const wouldApply = (date: string) => {
+            if (!rec.recurring) return false;
+            const dowMatch = rec.daysOfWeek.includes(new Date(date).getDay());
+            if (!dowMatch) return false;
+            if (rec.dateRange?.startDate && rec.dateRange?.endDate) {
+                const end = new Date(rec.dateRange.endDate);
+                end.setDate(end.getDate() + 1);
+                const incEnd = end.toISOString().split('T')[0];
+                return date >= rec.dateRange.startDate && date < incEnd;
+            }
+            return true;
+        };
+        const del = new Set<string>();
+        for (const ex of existing) {
+            if (ex.recurring || !ex.specificDates?.length) continue;
+            for (const date of ex.specificDates) {
+                if (!wouldApply(date)) continue;
+                const occR = getOccurrenceOnDate(rec, date);
+                const occO = getOccurrenceOnDate(ex, date);
+                const overlap = occR.isAllDay || occO.isAllDay || timesOverlapLocal(occR.startTime, occR.endTime, occO.startTime, occO.endTime);
+                if (overlap) del.add(date);
+            }
+        }
+        return Array.from(del);
+    };
+
+    // Auto-prune past dates from one-time commitments so they naturally disappear from future calendars
+    useEffect(() => {
+        const prune = () => {
+            const today = new Date().toISOString().split('T')[0];
+            setFixedCommitments(prev => prev.map(c => {
+                if (c.recurring || !c.specificDates) return c;
+                const newDates = c.specificDates.filter(d => d >= today);
+                if (newDates.length === c.specificDates.length) return c;
+                const newMods = c.modifiedOccurrences
+                    ? Object.fromEntries(Object.entries(c.modifiedOccurrences).filter(([d]) => newDates.includes(d)))
+                    : c.modifiedOccurrences;
+                const newDeleted = c.deletedOccurrences
+                    ? c.deletedOccurrences.filter(d => newDates.includes(d))
+                    : c.deletedOccurrences;
+                return { ...c, specificDates: newDates, modifiedOccurrences: newMods, deletedOccurrences: newDeleted };
+            }));
+        };
+        prune();
+        const now = new Date();
+        const nextMidnight = new Date(now);
+        nextMidnight.setHours(24, 0, 0, 0);
+        const timeout = setTimeout(() => prune(), nextMidnight.getTime() - now.getTime());
+        return () => clearTimeout(timeout);
+    }, []);
+
 
     const handleAddFixedCommitment = async (commitmentData: Omit<FixedCommitment, 'id' | 'createdAt'>) => {
         const newCommitment: FixedCommitment = {
@@ -973,49 +1082,20 @@ function App() {
             id: Date.now().toString(),
             createdAt: new Date().toISOString()
         };
-        // Handle override logic for commitments
+
         let updatedCommitments = [...fixedCommitments];
-        
-        if (!newCommitment.recurring && newCommitment.specificDates) {
-            // For one-time commitments, check if they conflict with recurring commitments
-            const conflicts = checkCommitmentConflicts(newCommitment, fixedCommitments);
-            
-            if (conflicts.hasConflict && conflicts.conflictType === 'override' && conflicts.conflictingCommitment) {
-                // Add the conflicting dates to the recurring commitment's deletedOccurrences
-                const conflictingCommitment = conflicts.conflictingCommitment;
-                const updatedConflictingCommitment = {
-                    ...conflictingCommitment,
-                    deletedOccurrences: [
-                        ...(conflictingCommitment.deletedOccurrences || []),
-                        ...(conflicts.conflictingDates || [])
-                    ]
-                };
-                
-                // Update the conflicting commitment
-                updatedCommitments = updatedCommitments.map(commitment => 
-                    commitment.id === conflictingCommitment.id 
-                        ? updatedConflictingCommitment 
-                        : commitment
-                );
-            }
-        } else if (newCommitment.recurring && newCommitment.daysOfWeek) {
-            // For recurring commitments, check if they conflict with one-time commitments
-            const conflicts = checkCommitmentConflicts(newCommitment, fixedCommitments);
-            
-            if (conflicts.hasConflict && conflicts.conflictType === 'override' && conflicts.conflictingDates) {
-                // Add the conflicting dates to the new recurring commitment's deletedOccurrences
-                newCommitment.deletedOccurrences = [
-                    ...(newCommitment.deletedOccurrences || []),
-                    ...conflicts.conflictingDates
-                ];
-            }
+
+        if (!newCommitment.recurring) {
+            // One-time commitments override ALL overlapping recurring occurrences across the set
+            updatedCommitments = applyOneTimeOverridesToRecurring(newCommitment, updatedCommitments);
+        } else {
+            // Recurring commitments should skip ALL dates that overlap with existing one-time commitments
+            newCommitment.deletedOccurrences = computeRecurringDeletedFromOneTimes(newCommitment, updatedCommitments);
         }
-        
-        // Add the new commitment
+
         updatedCommitments = [...updatedCommitments, newCommitment];
         setFixedCommitments(updatedCommitments);
-        
-        // Regenerate study plan with new commitment, preserving manual schedules
+
         if (tasks.length > 0) {
             const { plans: newPlans } = generateNewStudyPlanWithPreservation(tasks, settings, updatedCommitments, studyPlans);
             setStudyPlans(newPlans);
@@ -1105,126 +1185,63 @@ function App() {
     };
 
     const handleUpdateFixedCommitment = (commitmentId: string, updates: Partial<FixedCommitment>) => {
-        // Get the original commitment before updates
         const originalCommitment = fixedCommitments.find(c => c.id === commitmentId);
 
-        // First, update the commitment
         let updatedCommitments = fixedCommitments.map(commitment =>
             commitment.id === commitmentId ? { ...commitment, ...updates } : commitment
         );
 
-        // If updating a one-time commitment, first restore any previously overridden recurring commitments
+        // If updating a one-time commitment, first restore previously overridden recurring occurrences
         if (originalCommitment && !originalCommitment.recurring && originalCommitment.specificDates) {
-            // Restore dates that were previously overridden but are no longer conflicting
             updatedCommitments = updatedCommitments.map(commitment => {
-                if (!commitment.recurring || !commitment.deletedOccurrences) {
-                    return commitment;
-                }
-
-                // Find dates that were overridden by the original one-time commitment
+                if (!commitment.recurring || !commitment.deletedOccurrences) return commitment;
                 const previouslyOverriddenDates = originalCommitment.specificDates?.filter(date => {
                     const dayOfWeek = new Date(date).getDay();
-                    return commitment.daysOfWeek.includes(dayOfWeek) &&
-                           commitment.deletedOccurrences?.includes(date);
+                    return commitment.daysOfWeek.includes(dayOfWeek) && commitment.deletedOccurrences?.includes(date);
                 }) || [];
-
-                // Remove these dates from deletedOccurrences (they will be re-added later if still conflicting)
                 if (previouslyOverriddenDates.length > 0) {
                     return {
                         ...commitment,
-                        deletedOccurrences: commitment.deletedOccurrences.filter(date =>
-                            !previouslyOverriddenDates.includes(date)
-                        )
+                        deletedOccurrences: commitment.deletedOccurrences.filter(date => !previouslyOverriddenDates.includes(date))
                     };
                 }
-
                 return commitment;
             });
         }
 
-        // Handle override logic for commitments
-        const updatedCommitment = updatedCommitments.find(c => c.id === commitmentId);
-        if (updatedCommitment) {
-            if (!updatedCommitment.recurring && updatedCommitment.specificDates) {
-                // For one-time commitments, check if they conflict with recurring commitments
-                const conflicts = checkCommitmentConflicts(updatedCommitment, fixedCommitments, commitmentId);
-                
-                if (conflicts.hasConflict && conflicts.conflictType === 'override' && conflicts.conflictingCommitment) {
-                    // Add the conflicting dates to the recurring commitment's deletedOccurrences
-                    const conflictingCommitment = conflicts.conflictingCommitment;
-                    const updatedConflictingCommitment = {
-                        ...conflictingCommitment,
-                        deletedOccurrences: [
-                            ...(conflictingCommitment.deletedOccurrences || []),
-                            ...(conflicts.conflictingDates || [])
-                        ]
-                    };
-                    
-                    // Update the conflicting commitment
-                    updatedCommitments = updatedCommitments.map(commitment => 
-                        commitment.id === conflictingCommitment.id 
-                            ? updatedConflictingCommitment 
-                            : commitment
-                    );
-                }
-            } else if (updatedCommitment.recurring && updatedCommitment.daysOfWeek) {
-                // For recurring commitments, check if they conflict with one-time commitments
-                const conflicts = checkCommitmentConflicts(updatedCommitment, fixedCommitments, commitmentId);
-                
-                if (conflicts.hasConflict && conflicts.conflictType === 'override' && conflicts.conflictingDates) {
-                    // Add the conflicting dates to the updated recurring commitment's deletedOccurrences
-                    const updatedCommitmentWithDeletedOccurrences = {
-                        ...updatedCommitment,
-                        deletedOccurrences: [
-                            ...(updatedCommitment.deletedOccurrences || []),
-                            ...conflicts.conflictingDates
-                        ]
-                    };
-                    
-                    // Update the commitment being edited
-                    updatedCommitments = updatedCommitments.map(commitment => 
-                        commitment.id === commitmentId 
-                            ? updatedCommitmentWithDeletedOccurrences 
-                            : commitment
-                    );
-                }
+        // Recompute overrides comprehensively
+        const cur = updatedCommitments.find(c => c.id === commitmentId);
+        if (cur) {
+            if (!cur.recurring) {
+                updatedCommitments = applyOneTimeOverridesToRecurring(cur, updatedCommitments);
+            } else {
+                const newDeleted = computeRecurringDeletedFromOneTimes(cur, fixedCommitments);
+                updatedCommitments = updatedCommitments.map(c => c.id === commitmentId ? { ...c, deletedOccurrences: newDeleted } : c);
             }
         }
 
         setFixedCommitments(updatedCommitments);
 
-        // Check if this is only a timing update (drag and drop) vs structural change
         const isTimingOnlyUpdate = originalCommitment && updates && Object.keys(updates).every(key =>
             key === 'modifiedOccurrences' || key === 'daySpecificTimings'
         );
 
-        // Only regenerate study plan if this is NOT just a timing update
-        // Timing updates (drag/drop) shouldn't affect study sessions scheduling
         if (!isTimingOnlyUpdate && tasks.length > 0) {
             const { plans: newPlans } = generateNewStudyPlanWithPreservation(tasks, settings, updatedCommitments, studyPlans);
-
-            // Preserve session status from previous plan
             newPlans.forEach(plan => {
                 const prevPlan = studyPlans.find(p => p.date === plan.date);
                 if (!prevPlan) return;
-
-                // Preserve session status and properties
                 plan.plannedTasks.forEach(session => {
                     const prevSession = prevPlan.plannedTasks.find(s => s.taskId === session.taskId && s.sessionNumber === session.sessionNumber);
                     if (prevSession) {
-                        // Preserve done sessions
                         if (prevSession.done) {
                             session.done = true;
                             session.status = prevSession.status;
                             session.actualHours = prevSession.actualHours;
                             session.completedAt = prevSession.completedAt;
-                        }
-                        // Preserve skipped sessions
-                        else if (prevSession.status === 'skipped') {
+                        } else if (prevSession.status === 'skipped') {
                             session.status = 'skipped';
-                        }
-                        // Preserve rescheduled sessions
-                        else if (prevSession.originalTime && prevSession.originalDate) {
+                        } else if (prevSession.originalTime && prevSession.originalDate) {
                             session.originalTime = prevSession.originalTime;
                             session.originalDate = prevSession.originalDate;
                             session.rescheduledAt = prevSession.rescheduledAt;
@@ -1233,7 +1250,6 @@ function App() {
                     }
                 });
             });
-
             setStudyPlans(newPlans);
             setLastPlanStaleReason("commitment");
         }
