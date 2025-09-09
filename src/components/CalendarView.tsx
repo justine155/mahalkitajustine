@@ -847,36 +847,30 @@ const CalendarView: React.FC<CalendarViewProps> = ({
     // Handle commitment dragging
     if (event.resource.type === 'commitment') {
       const commitment = event.resource.data as FixedCommitment;
-
       if (!onUpdateCommitment) {
         setDragFeedback('Commitment updates not available');
         setTimeout(() => setDragFeedback(''), 3000);
         return;
       }
-
       const targetDate = moment(start).format('YYYY-MM-DD');
       const originalDate = moment(event.start).format('YYYY-MM-DD');
 
-      // Allow moving all-day commitments by date (remain all-day)
+      // Disallow cross-day moves for commitments
+      if (targetDate !== originalDate) {
+        setDragFeedback('Commitments can only be moved within the same day');
+        setTimeout(() => setDragFeedback(''), 3000);
+        return;
+      }
+
+      // Keep all-day commitments static (no time drag)
       if (commitment.isAllDay) {
-        setPendingCommitmentMove({
-          commitment,
-          targetDate,
-          newStartTime: '00:00',
-          newEndTime: '23:59',
-          originalDate,
-          dayOfWeek: moment(start).day(),
-          durationMinutes: 24 * 60,
-          isAllDay: true,
-        });
-        setDragFeedback(`📅 All-day moved to ${moment(start).format('ddd, MMM D')}`);
+        setDragFeedback('All-day commitments cannot be moved');
         setTimeout(() => setDragFeedback(''), 3000);
         return;
       }
 
       const durationMinutes = Math.max(5, Math.round(moment(end).diff(moment(start), 'minutes')));
       const durationHours = durationMinutes / 60;
-
       const slot = findNearestAvailableSlotForCommitment(start, durationHours, targetDate, commitment);
       if (!slot) {
         setDragFeedback('No available time slot found for this commitment');
@@ -886,19 +880,20 @@ const CalendarView: React.FC<CalendarViewProps> = ({
 
       const finalStart = moment(slot.start).format('HH:mm');
       const finalEnd = moment(slot.end).format('HH:mm');
-      const dow = moment(slot.start).day();
 
-      setPendingCommitmentMove({
-        commitment,
-        targetDate,
-        newStartTime: finalStart,
-        newEndTime: finalEnd,
-        originalDate,
-        dayOfWeek: dow,
-        durationMinutes
-      });
+      const updated = {
+        ...(commitment.modifiedOccurrences || {}),
+        [targetDate]: {
+          startTime: finalStart,
+          endTime: finalEnd,
+          title: commitment.title,
+          category: commitment.category,
+          isAllDay: false,
+        }
+      } as NonNullable<FixedCommitment['modifiedOccurrences']>;
 
-      // Feedback about placement precision
+      onUpdateCommitment(commitment.id, { modifiedOccurrences: updated });
+
       const diffMin = Math.abs(moment(slot.start).diff(moment(start), 'minutes'));
       if (diffMin === 0) setDragFeedback(`✅ Placed at ${finalStart}`);
       else if (diffMin <= 15) setDragFeedback(`📍 Placed at ${finalStart} (${diffMin}m from target)`);
@@ -941,113 +936,6 @@ const CalendarView: React.FC<CalendarViewProps> = ({
     const availableSlot = findNearestAvailableSlot(start, sessionDuration, targetDate, session);
 
     if (!availableSlot) {
-      // Try forced placement by pushing overlapping sessions (no commitment conflict)
-      const intendedStart = new Date(start);
-      const intendedEnd = new Date(intendedStart.getTime() + sessionDuration * 60 * 60 * 1000);
-      const dayStart = moment(targetDate).hour(settings.studyWindowStartHour || 6).minute(0).second(0).toDate();
-      const dayEnd = moment(targetDate).hour(settings.studyWindowEndHour || 23).minute(0).second(0).toDate();
-      const bufferMs = (settings.bufferTimeBetweenSessions || 0) * 60 * 1000;
-      const within = intendedStart >= dayStart && intendedEnd <= dayEnd;
-
-      let commitmentConflict = false;
-      if (within) {
-        for (const c of fixedCommitments) {
-          if (!doesCommitmentApplyToDate(c, targetDate)) continue;
-          const mod = c.modifiedOccurrences?.[targetDate];
-          const isAllDay = mod?.isAllDay ?? c.isAllDay;
-          if (isAllDay) { commitmentConflict = true; break; }
-          let sStr: string | undefined;
-          let eStr: string | undefined;
-          if (mod?.startTime && mod?.endTime) {
-            sStr = mod.startTime; eStr = mod.endTime;
-          } else if (c.useDaySpecificTiming && c.daySpecificTimings) {
-            const t = c.daySpecificTimings.find(t => t.dayOfWeek === moment(targetDate).day());
-            if (t && !t.isAllDay) { sStr = t.startTime; eStr = t.endTime; }
-          } else {
-            sStr = c.startTime; eStr = c.endTime;
-          }
-          if (sStr && eStr) {
-            const cs = moment(`${targetDate} ${sStr}`).toDate();
-            const ce = moment(`${targetDate} ${eStr}`).toDate();
-            const adjS = new Date(intendedStart.getTime() - bufferMs);
-            const adjE = new Date(intendedEnd.getTime() + bufferMs);
-            if (adjS < ce && adjE > cs) { commitmentConflict = true; break; }
-          }
-        }
-      }
-
-      if (within && !commitmentConflict) {
-        const planIndex = studyPlans.findIndex(p => p.date === targetDate);
-        if (planIndex >= 0) {
-          const plan = studyPlans[planIndex];
-          const tasksCopy = [...plan.plannedTasks];
-          const overlapping = tasksCopy
-            .map((s, idx) => ({ s, idx }))
-            .filter(({ s }) => s.status !== 'skipped' && s.startTime && s.endTime && !(s.taskId === session.taskId && s.sessionNumber === session.sessionNumber))
-            .filter(({ s }) => {
-              const os = moment(`${targetDate} ${s.startTime}`).toDate();
-              const oe = moment(`${targetDate} ${s.endTime}`).toDate();
-              const adjS = new Date(intendedStart.getTime() - bufferMs);
-              const adjE = new Date(intendedEnd.getTime() + bufferMs);
-              return adjS < oe && adjE > os;
-            });
-
-          if (overlapping.length) {
-            const draggedIndex = tasksCopy.findIndex(s => s.taskId === session.taskId && s.sessionNumber === session.sessionNumber);
-            const newStartStr = moment(intendedStart).format('HH:mm');
-            const newEndStr = moment(intendedEnd).format('HH:mm');
-            if (draggedIndex >= 0) {
-              tasksCopy[draggedIndex] = {
-                ...tasksCopy[draggedIndex],
-                startTime: newStartStr,
-                endTime: newEndStr,
-                originalTime: tasksCopy[draggedIndex].originalTime || tasksCopy[draggedIndex].startTime,
-                originalDate: tasksCopy[draggedIndex].originalDate || originalDate,
-                rescheduledAt: new Date().toISOString(),
-                isManualOverride: true,
-              } as StudySession;
-            } else {
-              tasksCopy.push({
-                ...session,
-                startTime: newStartStr,
-                endTime: newEndStr,
-                originalTime: session.originalTime || session.startTime,
-                originalDate: session.originalDate || originalDate,
-                rescheduledAt: new Date().toISOString(),
-                isManualOverride: true,
-              });
-            }
-
-            let extraBusy: Array<{ start: Date; end: Date }> = [{ start: intendedStart, end: intendedEnd }];
-            for (const { s, idx } of overlapping) {
-              const origStart = moment(`${targetDate} ${s.startTime}`).toDate();
-              const slot = findNearestAvailableSlot(origStart, s.allocatedHours, targetDate, undefined, extraBusy);
-              const useStart = slot ? slot.start : new Date(intendedEnd.getTime() + bufferMs);
-              const useEnd = slot ? slot.end : new Date(useStart.getTime() + s.allocatedHours * 60 * 60 * 1000);
-              tasksCopy[idx] = {
-                ...s,
-                startTime: moment(useStart).format('HH:mm'),
-                endTime: moment(useEnd).format('HH:mm'),
-                originalTime: s.originalTime || s.startTime,
-                originalDate: s.originalDate || targetDate,
-                rescheduledAt: new Date().toISOString(),
-                isManualOverride: true,
-              } as StudySession;
-              extraBusy.push({ start: useStart, end: useEnd });
-            }
-
-            const updatedPlans = [...studyPlans];
-            const planAfter = { ...plan, plannedTasks: tasksCopy };
-            fixMicroOverlapsOnDay(planAfter, settings);
-            updatedPlans[planIndex] = planAfter;
-            onUpdateStudyPlans(updatedPlans);
-            setDragFeedback(`Session placed at ${moment(intendedStart).format('HH:mm')} and moved ${overlapping.length} session(s)`);
-            setTimeout(() => setDragFeedback(''), 3000);
-            return;
-          }
-        }
-      }
-
       setDragFeedback('No available time slot found for this session');
       setTimeout(() => setDragFeedback(''), 3000);
       return;
