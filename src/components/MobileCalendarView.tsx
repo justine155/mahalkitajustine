@@ -133,12 +133,9 @@ const MobileCalendarView: React.FC<MobileCalendarViewProps> = ({
     if (selectedPlan) {
       // Filter out past incomplete sessions (forward focus approach)
       const today = moment().format('YYYY-MM-DD');
-      const relevantSessions = selectedPlan.plannedTasks.filter(session => {
-        // Always show sessions for today and future
-        if (selectedDateStr >= today) return true;
-
-        // For past dates, only show completed sessions
-        return session.done || session.status === 'completed' || session.status === 'skipped';
+      const relevantSessions = selectedPlan.plannedTasks.filter(() => {
+        // Show only today and future; hide all past sessions (completed/skipped included)
+        return selectedDateStr >= today;
       });
 
       relevantSessions.forEach(session => {
