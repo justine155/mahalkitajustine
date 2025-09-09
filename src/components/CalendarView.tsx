@@ -229,12 +229,9 @@ const CalendarView: React.FC<CalendarViewProps> = ({
     studyPlans.forEach(plan => {
       // Filter out past incomplete sessions (forward focus approach)
       const today = getLocalDateString();
-      const relevantTasks = plan.plannedTasks.filter(session => {
-        // Always show sessions for today and future
-        if (plan.date >= today) return true;
-
-        // For past dates, only show completed sessions
-        return session.done || session.status === 'completed' || session.status === 'skipped';
+      const relevantTasks = plan.plannedTasks.filter(() => {
+        // Show only today and future; hide all past sessions (completed/skipped included)
+        return plan.date >= today;
       });
 
       // Sort the relevant tasks by chronological order first, then by priority
@@ -2229,72 +2226,30 @@ const CalendarView: React.FC<CalendarViewProps> = ({
                 <button
                   className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
                   onClick={() => {
-                    const { commitment, targetDate, newStartTime, newEndTime, isAllDay } = pendingCommitmentMove;
+                    const { commitment, targetDate, newStartTime, newEndTime, isAllDay, durationMinutes } = pendingCommitmentMove;
 
-                    // Move overlapping study sessions on this date to nearest available slots
-                    const newStart = isAllDay ? moment(`${targetDate} 00:00`).toDate() : moment(`${targetDate} ${newStartTime}`).toDate();
-                    const newEnd = isAllDay ? moment(`${targetDate} 23:59`).toDate() : moment(`${targetDate} ${newEndTime}`).toDate();
+                    // Do NOT move sessions. Try to find nearest valid slot for the commitment itself; otherwise reject.
+                    let finalStart = newStartTime;
+                    let finalEnd = newEndTime;
 
-                    let updatedPlans = [...studyPlans];
-                    const planIndex = updatedPlans.findIndex(p => p.date === targetDate);
-                    if (planIndex >= 0 && settings && onUpdateStudyPlans) {
-                      const plan = updatedPlans[planIndex];
-                      const tasksCopy = [...plan.plannedTasks];
-
-                      const overlaps = tasksCopy
-                        .map((s, idx) => ({ s, idx }))
-                        .filter(({ s }) => s.status !== 'skipped' && s.startTime && s.endTime)
-                        .filter(({ s }) => {
-                          const sStart = moment(`${targetDate} ${s.startTime}`).toDate();
-                          const sEnd = moment(`${targetDate} ${s.endTime}`).toDate();
-                          return sStart < newEnd && sEnd > newStart;
-                        });
-
-                      let extraBusy: Array<{ start: Date; end: Date }> = [{ start: newStart, end: newEnd }];
-                      for (const { s, idx } of overlaps) {
-                        const originalStart = moment(`${targetDate} ${s.startTime}`).toDate();
-                        const slot = findNearestAvailableSlot(
-                          originalStart,
-                          s.allocatedHours,
-                          targetDate,
-                          s,
-                          extraBusy,
-                          { id: commitment.id, date: targetDate }
-                        );
-                        if (!slot) {
-                          setDragFeedback('Unable to move one or more sessions to fit the commitment');
-                          return; // Abort without updating commitment
-                        }
-                        // Update session
-                        const updatedSession = {
-                          ...s,
-                          startTime: moment(slot.start).format('HH:mm'),
-                          endTime: moment(slot.end).format('HH:mm'),
-                          originalTime: s.originalTime || s.startTime,
-                          originalDate: s.originalDate || targetDate,
-                          rescheduledAt: new Date().toISOString(),
-                          isManualOverride: true
-                        } as StudySession;
-                        tasksCopy[idx] = updatedSession;
-                        extraBusy.push({ start: slot.start, end: slot.end });
-                      }
-
-                      const planAfter = { ...plan, plannedTasks: tasksCopy };
-                      fixMicroOverlapsOnDay(planAfter, settings!);
-                      updatedPlans[planIndex] = planAfter;
-                      onUpdateStudyPlans(updatedPlans);
-                      if (overlaps.length) {
-                        setDragFeedback(`Moved ${overlaps.length} session(s) to accommodate commitment`);
+                    if (!isAllDay) {
+                      const targetStart = moment(`${targetDate} ${newStartTime}`).toDate();
+                      const slot = findNearestAvailableSlotForCommitment(targetStart, (durationMinutes || 0) / 60, targetDate, commitment);
+                      if (!slot) {
+                        setDragFeedback('Cannot place commitment without moving sessions');
                         setTimeout(() => setDragFeedback(''), 3000);
+                        return;
                       }
+                      finalStart = moment(slot.start).format('HH:mm');
+                      finalEnd = moment(slot.end).format('HH:mm');
                     }
 
                     // Apply commitment change for only this block
                     const updated = {
                       ...commitment.modifiedOccurrences,
                       [targetDate]: {
-                        startTime: newStartTime,
-                        endTime: newEndTime,
+                        startTime: isAllDay ? undefined : finalStart,
+                        endTime: isAllDay ? undefined : finalEnd,
                         title: commitment.title,
                         category: commitment.category,
                         isAllDay: !!isAllDay,
@@ -2302,7 +2257,6 @@ const CalendarView: React.FC<CalendarViewProps> = ({
                     } as NonNullable<FixedCommitment['modifiedOccurrences']>;
                     onUpdateCommitment && onUpdateCommitment(commitment.id, { modifiedOccurrences: updated });
                     setPendingCommitmentMove(null);
-                    if (onRefreshStudyPlan) onRefreshStudyPlan(false);
                   }}
                 >
                   Only this block
@@ -2417,7 +2371,6 @@ const CalendarView: React.FC<CalendarViewProps> = ({
                       }
                     }
                     setPendingCommitmentMove(null);
-                    if (onRefreshStudyPlan) onRefreshStudyPlan(false);
                   }}
                 >
                   All similar
