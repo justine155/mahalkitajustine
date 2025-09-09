@@ -692,7 +692,7 @@ function App() {
     };
 
     const computeWeeklyStreak = (history: string[], targetPerWeek: number = 1, todayStr: string) => {
-        // Count consecutive weeks (ending this week) meeting target
+        // Streak counts consecutive weeks meeting target. Do not reset mid-week; only weeks matter.
         const byWeek = new Map<string, number>();
         history.forEach(d => {
             const date = new Date(d);
@@ -701,21 +701,29 @@ function App() {
             const key = startOfWeek.toISOString().split('T')[0];
             byWeek.set(key, (byWeek.get(key) || 0) + 1);
         });
-        let streak = 0;
         const now = new Date(todayStr);
-        const weekStart = new Date(now);
-        weekStart.setDate(now.getDate() - now.getDay());
+        const currentWeekStart = new Date(now);
+        currentWeekStart.setDate(now.getDate() - now.getDay());
+        const currentWeekKey = currentWeekStart.toISOString().split('T')[0];
+        const currentWeekCount = byWeek.get(currentWeekKey) || 0;
+
+        // Count consecutive successful weeks BEFORE the current week
+        let prevStreak = 0;
+        const weekIter = new Date(currentWeekStart);
+        weekIter.setDate(weekIter.getDate() - 7); // start from last week
         while (true) {
-            const key = weekStart.toISOString().split('T')[0];
+            const key = weekIter.toISOString().split('T')[0];
             const count = byWeek.get(key) || 0;
             if (count >= targetPerWeek) {
-                streak += 1;
-                weekStart.setDate(weekStart.getDate() - 7);
+                prevStreak += 1;
+                weekIter.setDate(weekIter.getDate() - 7);
             } else {
                 break;
             }
         }
-        return streak;
+
+        // Include current week only if target already met; otherwise keep previous streak
+        return currentWeekCount >= targetPerWeek ? prevStreak + 1 : prevStreak;
     };
 
     const handleAddHabit = (input: { title: string; cadence: 'daily' | 'weekly'; targetPerWeek?: number; reminder?: boolean }) => {
@@ -2511,6 +2519,23 @@ function App() {
                             </div>
                             <div className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-violet-600 via-purple-600 to-indigo-600 bg-clip-text text-transparent drop-shadow-sm">TimePilot</div>
                         </div>
+                        <div className="hidden lg:flex flex-1 items-center justify-center">
+                            <div className="flex items-center bg-gradient-to-r from-blue-100/80 via-indigo-100/80 to-purple-100/80 dark:from-gray-800/80 dark:via-blue-900/40 dark:to-indigo-900/40 rounded-2xl p-1.5 shadow-inner border border-blue-200/50 dark:border-blue-800/50">
+                                {tabs.map((tab) => (
+                                    <button
+                                        key={tab.id}
+                                        onClick={() => { setActiveTab(tab.id as typeof activeTab); setMobileMenuOpen(false); }}
+                                        className={`flex items-center justify-center px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 relative group ${activeTab === tab.id ? 'bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 text-white shadow-lg shadow-blue-500/30' : 'text-gray-700 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-white/80 dark:hover:bg-gray-700/60'} ${showInteractiveTutorial && highlightedTab === tab.id ? 'ring-2 ring-yellow-400 animate-pulse' : ''}`}
+                                        title={tab.label}
+                                    >
+                                        <tab.icon size={18} className={activeTab === tab.id ? 'drop-shadow-sm' : 'group-hover:scale-110 transition-transform'} />
+                                        {activeTab === tab.id && (
+                                            <span className="ml-2.5 inline drop-shadow-sm">{tab.label}</span>
+                                        )}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
                         <div className="flex items-center space-x-2 sm:space-x-3 md:space-x-4">
                             <button
                                 className={`flex items-center rounded-xl sm:rounded-2xl p-2 sm:p-3 backdrop-blur-lg transition-all duration-300 z-50 border-2 ${
@@ -2573,8 +2598,8 @@ function App() {
                 <nav className="sticky-nav backdrop-blur-xl bg-gradient-to-r from-white/90 via-blue-50/85 to-indigo-50/85 dark:from-gray-900/95 dark:via-blue-900/25 dark:to-indigo-900/25 shadow-2xl shadow-blue-500/8 dark:shadow-blue-900/15 border-b border-gradient-to-r from-blue-200/15 via-indigo-200/15 to-purple-200/15 dark:from-blue-800/15 dark:via-indigo-800/15 dark:to-purple-800/15">
                     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                         {/* Desktop Navigation */}
-                        <div className="hidden lg:flex items-center justify-center space-x-1 py-4">
-                            <div className="flex items-center bg-gradient-to-r from-blue-100/80 via-indigo-100/80 to-purple-100/80 dark:from-gray-800/80 dark:via-blue-900/40 dark:to-indigo-900/40 rounded-2xl p-1.5 shadow-inner border border-blue-200/50 dark:border-blue-800/50">
+                        <div className="hidden">
+                            <div className="flex items-center bg-gradient-to-r from-blue-100/80 via-indigo-100/80 to-purple-100/80 dark:from-gray-800/80 dark:via-blue-900/40 dark:to-indigo-900/40 rounded-2xl p-1 shadow-inner border border-blue-200/50 dark:border-blue-800/50">
                                 {tabs.map((tab) => (
                                     <button
                                         key={tab.id}
