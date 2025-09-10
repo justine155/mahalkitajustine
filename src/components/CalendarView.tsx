@@ -171,6 +171,15 @@ const CalendarView: React.FC<CalendarViewProps> = ({
     isAllDay?: boolean;
   }>(null);
 
+  // Modal state for optionally moving overlapping task sessions
+  const [pendingSessionCascade, setPendingSessionCascade] = useState<null | {
+    commitment: FixedCommitment;
+    targetDate: string;
+    dropStart: Date;
+    dropEnd: Date;
+    overlappingSessionIds: Array<{ taskId: string; sessionNumber?: number }>;
+  }>(null);
+
 
   // Persist calendar view to localStorage
   useEffect(() => {
@@ -927,6 +936,59 @@ const CalendarView: React.FC<CalendarViewProps> = ({
     return null;
   };
 
+  // Find a slot that only considers other commitments (sessions can move)
+  const findSlotAgainstCommitmentsOnly = (
+    targetStart: Date,
+    durationHours: number,
+    targetDate: string,
+    excludeCommitmentId: string
+  ): { start: Date; end: Date } | null => {
+    if (!settings) return null;
+    const bufferTimeMs = (settings.bufferTimeBetweenSessions || 0) * 60 * 1000;
+
+    const busy: Array<{ start: Date; end: Date }> = [];
+
+    fixedCommitments.forEach(c => {
+      if (c.id === excludeCommitmentId) return;
+      if (!doesCommitmentApplyToDate(c, targetDate)) return;
+      const t = getCommitmentTimeOnDate(c, targetDate);
+      if (t.isAllDay || !t.start || !t.end) return;
+      busy.push({ start: t.start, end: t.end });
+    });
+
+    busy.sort((a, b) => a.start.getTime() - b.start.getTime());
+
+    const dayStart = moment(targetDate).startOf('day').toDate();
+    const dayEnd = moment(targetDate).endOf('day').toDate();
+    const durMs = durationHours * 60 * 60 * 1000;
+
+    const isValid = (s: Date, e: Date) => {
+      if (s < dayStart || e > dayEnd) return false;
+      for (const b of busy) {
+        const adjS = new Date(s.getTime() - bufferTimeMs);
+        const adjE = new Date(e.getTime() + bufferTimeMs);
+        if (adjS < b.end && adjE > b.start) return false;
+      }
+      return true;
+    };
+
+    const SNAP = timeInterval * 60 * 1000;
+    const exactEnd = new Date(targetStart.getTime() + durMs);
+    if (isValid(targetStart, exactEnd)) return { start: targetStart, end: exactEnd };
+    const rounded = new Date(Math.round(targetStart.getTime() / SNAP) * SNAP);
+    const roundedEnd = new Date(rounded.getTime() + durMs);
+    if (isValid(rounded, roundedEnd)) return { start: rounded, end: roundedEnd };
+    const maxSearch = 6 * 60 * 60 * 1000;
+    for (let off = SNAP; off <= maxSearch; off += SNAP) {
+      for (const dir of [1, -1]) {
+        const s = new Date(rounded.getTime() + dir * off);
+        const e = new Date(s.getTime() + durMs);
+        if (isValid(s, e)) return { start: s, end: e };
+      }
+    }
+    return null;
+  };
+
   // Handle drag start
   const handleDragStart = (event: any) => {
     setIsDragging(true);
@@ -971,44 +1033,60 @@ const CalendarView: React.FC<CalendarViewProps> = ({
       const durationMinutes = Math.max(5, Math.round(moment(end).diff(moment(start), 'minutes')));
       const durationHours = durationMinutes / 60;
 
-      // Attempt to place at drop time if it doesn't conflict with study sessions (commitments are movable)
-      const intendedStart = new Date(start);
+      // Snap intended drop to grid
+      const SNAP = timeInterval * 60 * 1000;
+      const intendedStart = new Date(Math.round(new Date(start).getTime() / SNAP) * SNAP);
       const intendedEnd = new Date(intendedStart.getTime() + durationMinutes * 60 * 1000);
 
-      // Check only session conflicts
-      let sessionConflict = false;
+      // Detect overlapping study sessions (same-day only)
+      const overlappingSessions: Array<{ taskId: string; sessionNumber?: number }> = [];
       studyPlans.forEach(plan => {
         if (plan.date !== targetDate) return;
         plan.plannedTasks.forEach(s => {
-          if (s.status === 'skipped' || !s.startTime || !s.endTime) return;
+          if (!s.startTime || !s.endTime) return;
+          if (s.status === 'skipped') return;
+          const status = checkSessionStatus(s, targetDate);
+          if (status === 'completed' || status === 'in_progress') return;
           const sStart = moment(`${targetDate} ${s.startTime}`).toDate();
           const sEnd = moment(`${targetDate} ${s.endTime}`).toDate();
-          if (intendedStart < sEnd && intendedEnd > sStart) sessionConflict = true;
+          if (intendedStart < sEnd && intendedEnd > sStart) {
+            overlappingSessions.push({ taskId: s.taskId, sessionNumber: s.sessionNumber });
+          }
         });
       });
 
-      let placed = sessionConflict
-        ? findNearestAvailableSlotForCommitment(intendedStart, durationHours, targetDate, commitment)
-        : { start: intendedStart, end: intendedEnd };
+      if (overlappingSessions.length > 0) {
+        // Ask user whether to move overlapping task sessions
+        setPendingSessionCascade({
+          commitment,
+          targetDate,
+          dropStart: intendedStart,
+          dropEnd: intendedEnd,
+          overlappingSessionIds: overlappingSessions,
+        });
+        return;
+      }
 
-      if (!placed) {
+      // No session conflict: place with standard nearest-available (respects sessions/commitments)
+      const slot = findNearestAvailableSlotForCommitment(intendedStart, durationHours, targetDate, commitment);
+      if (!slot) {
         setDragFeedback('No available time slot found for this commitment');
         setTimeout(() => setDragFeedback(''), 3000);
         return;
       }
 
-      // Determine commitments overlapping the placed interval on this date
+      // Cascade commitments (if any) as before
+      const placed = { start: slot.start, end: slot.end };
+
       const overlaps = fixedCommitments
         .filter(c => c.id !== commitment.id && doesCommitmentApplyToDate(c, targetDate))
         .map(c => ({ c, t: getCommitmentTimeOnDate(c, targetDate) }))
         .filter(({ t }) => t.start && t.end && !t.isAllDay)
         .filter(({ t }) => placed!.start < (t.end as Date) && placed!.end > (t.start as Date));
 
-      // Relocate overlapping commitments cascade
       const extraBusy: Array<{ start: Date; end: Date }> = [{ start: placed.start, end: placed.end }];
       const relocations: Array<{ id: string; start: Date; end: Date }> = [];
 
-      // Sort overlaps by proximity to placed start to minimize ripple
       overlaps.sort((a, b) => Math.abs((a.t.start as Date).getTime() - placed.start.getTime()) - Math.abs((b.t.start as Date).getTime() - placed.start.getTime()));
 
       for (const { c, t } of overlaps) {
@@ -1024,7 +1102,6 @@ const CalendarView: React.FC<CalendarViewProps> = ({
         extraBusy.push({ start: slot2.start, end: slot2.end });
       }
 
-      // Apply updates: first moving commitment, then relocated ones
       const finalStart = moment(placed.start).format('HH:mm');
       const finalEnd = moment(placed.end).format('HH:mm');
       const updated = {
@@ -2430,6 +2507,151 @@ const CalendarView: React.FC<CalendarViewProps> = ({
                 <button
                   className="w-full px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
                   onClick={() => setPendingCommitmentMove(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Session Cascade Modal */}
+      {pendingSessionCascade && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={() => setPendingSessionCascade(null)}>
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-bold text-gray-800 dark:text-white">Resolve Session Conflicts</h2>
+                <button onClick={() => setPendingSessionCascade(null)} className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="text-sm text-gray-700 dark:text-gray-300 space-y-2 mb-4">
+                <div><strong>{pendingSessionCascade.commitment.title}</strong></div>
+                <div>
+                  This move overlaps {pendingSessionCascade.overlappingSessionIds.length} study session(s) on {moment(pendingSessionCascade.targetDate).format('ddd, MMM D')}.
+                </div>
+              </div>
+              <div className="space-y-2">
+                <button
+                  className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  onClick={() => {
+                    const { commitment, targetDate, dropStart, dropEnd } = pendingSessionCascade;
+                    const durationHours = (dropEnd.getTime() - dropStart.getTime()) / (1000 * 60 * 60);
+                    const slot = findNearestAvailableSlotForCommitment(dropStart, durationHours, targetDate, commitment);
+                    if (!slot) {
+                      setDragFeedback('No available time slot found without moving sessions');
+                      setTimeout(() => setDragFeedback(''), 3000);
+                      setPendingSessionCascade(null);
+                      return;
+                    }
+                    const finalStart = moment(slot.start).format('HH:mm');
+                    const finalEnd = moment(slot.end).format('HH:mm');
+                    const updated = {
+                      ...(commitment.modifiedOccurrences || {}),
+                      [targetDate]: {
+                        startTime: finalStart,
+                        endTime: finalEnd,
+                        title: commitment.title,
+                        category: commitment.category,
+                        isAllDay: false,
+                      }
+                    } as NonNullable<FixedCommitment['modifiedOccurrences']>;
+                    onUpdateCommitment && onUpdateCommitment(commitment.id, { modifiedOccurrences: updated });
+                    setDragFeedback(`✅ Placed at ${finalStart}`);
+                    setTimeout(() => setDragFeedback(''), 3000);
+                    setPendingSessionCascade(null);
+                  }}
+                >
+                  Place commitment only (don’t move sessions)
+                </button>
+                <button
+                  className="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                  onClick={() => {
+                    const data = pendingSessionCascade;
+                    if (!data || !onUpdateCommitment || !onUpdateStudyPlans || !settings) { setPendingSessionCascade(null); return; }
+                    const { commitment, targetDate, dropStart, dropEnd, overlappingSessionIds } = data;
+
+                    // First, find a slot for the commitment against other commitments only
+                    const durH = (dropEnd.getTime() - dropStart.getTime()) / (1000 * 60 * 60);
+                    const placed = findSlotAgainstCommitmentsOnly(dropStart, durH, targetDate, commitment.id);
+                    if (!placed) {
+                      setDragFeedback('No slot available due to other commitments');
+                      setTimeout(() => setDragFeedback(''), 3000);
+                      setPendingSessionCascade(null);
+                      return;
+                    }
+
+                    // Precompute new slots for all overlapping sessions
+                    const extraBusy: Array<{ start: Date; end: Date }> = [{ start: placed.start, end: placed.end }];
+                    const sessionMoves: Array<{ taskId: string; sessionNumber?: number; start: Date; end: Date }> = [];
+
+                    // Build quick lookup of sessions on that date
+                    const plan = studyPlans.find(p => p.date === targetDate);
+                    if (!plan) { setPendingSessionCascade(null); return; }
+
+                    for (const id of overlappingSessionIds) {
+                      const s = plan.plannedTasks.find(ps => ps.taskId === id.taskId && ps.sessionNumber === id.sessionNumber);
+                      if (!s || !s.startTime || !s.endTime) continue;
+                      const slot2 = findNearestAvailableSlot(new Date(`${targetDate}T${s.startTime}:00`), s.allocatedHours, targetDate, s, extraBusy);
+                      if (!slot2) {
+                        setDragFeedback('Unable to move one or more sessions');
+                        setTimeout(() => setDragFeedback(''), 3000);
+                        setPendingSessionCascade(null);
+                        return;
+                      }
+                      sessionMoves.push({ taskId: id.taskId, sessionNumber: id.sessionNumber, start: slot2.start, end: slot2.end });
+                      extraBusy.push({ start: slot2.start, end: slot2.end });
+                    }
+
+                    // Apply commitment update
+                    const finalStart = moment(placed.start).format('HH:mm');
+                    const finalEnd = moment(placed.end).format('HH:mm');
+                    const mods = {
+                      ...(commitment.modifiedOccurrences || {}),
+                      [targetDate]: {
+                        startTime: finalStart,
+                        endTime: finalEnd,
+                        title: commitment.title,
+                        category: commitment.category,
+                        isAllDay: false,
+                      }
+                    } as NonNullable<FixedCommitment['modifiedOccurrences']>;
+                    onUpdateCommitment(commitment.id, { modifiedOccurrences: mods });
+
+                    // Apply session moves atomically
+                    const updatedPlans = studyPlans.map(p => {
+                      if (p.date !== targetDate) return p;
+                      const updatedTasks = p.plannedTasks.map(s => {
+                        const mv = sessionMoves.find(m => m.taskId === s.taskId && m.sessionNumber === s.sessionNumber);
+                        if (!mv) return s;
+                        return {
+                          ...s,
+                          startTime: moment(mv.start).format('HH:mm'),
+                          endTime: moment(mv.end).format('HH:mm'),
+                          originalTime: s.originalTime || s.startTime,
+                          originalDate: s.originalDate || targetDate,
+                          rescheduledAt: new Date().toISOString(),
+                          isManualOverride: true,
+                        } as typeof s;
+                      });
+                      const clone = { ...p, plannedTasks: updatedTasks };
+                      fixMicroOverlapsOnDay(clone, settings);
+                      return clone;
+                    });
+
+                    onUpdateStudyPlans(updatedPlans);
+                    setDragFeedback(`✅ Placed at ${finalStart}; moved ${sessionMoves.length} session(s)`);
+                    setTimeout(() => setDragFeedback(''), 4000);
+                    setPendingSessionCascade(null);
+                  }}
+                >
+                  Move overlapping task sessions to fit
+                </button>
+                <button
+                  className="w-full px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
+                  onClick={() => setPendingSessionCascade(null)}
                 >
                   Cancel
                 </button>
