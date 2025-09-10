@@ -761,6 +761,17 @@ const CalendarView: React.FC<CalendarViewProps> = ({
     });
 
     // Commitments
+    // If any other all-day commitment applies, block the entire day for placement
+    const hasOtherAllDay = fixedCommitments.some(c => {
+      if (c.id === movingCommitment.id) return false;
+      if (!doesCommitmentApplyToDate(c, targetDate)) return false;
+      const mod = c.modifiedOccurrences?.[targetDate];
+      return !!(mod?.isAllDay ?? c.isAllDay);
+    });
+    if (hasOtherAllDay) {
+      return null;
+    }
+
     fixedCommitments.forEach(c => {
       if (!doesCommitmentApplyToDate(c, targetDate)) return;
       // Skip the moving commitment on this date (avoid self-conflict)
@@ -770,7 +781,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({
       const mod = c.modifiedOccurrences?.[targetDate];
       const isAllDay = mod?.isAllDay ?? c.isAllDay;
       if (isAllDay) {
-        // All-day commitments should NOT block the time grid; skip adding busy block
+        // All-day commitments block the entire day; already handled above
         return;
       }
       let startStr: string | undefined;
