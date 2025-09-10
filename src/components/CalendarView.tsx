@@ -902,6 +902,15 @@ const CalendarView: React.FC<CalendarViewProps> = ({
       });
     });
 
+    // If any non-excluded all-day commitment applies, no slot is possible
+    const hasAllDay = fixedCommitments.some(c => {
+      if (excludeCommitmentIds.has(c.id)) return false;
+      if (!doesCommitmentApplyToDate(c, targetDate)) return false;
+      const mod = c.modifiedOccurrences?.[targetDate];
+      return !!(mod?.isAllDay ?? c.isAllDay);
+    });
+    if (hasAllDay) return null;
+
     // Block other commitments not excluded
     fixedCommitments.forEach(c => {
       if (excludeCommitmentIds.has(c.id)) return;
